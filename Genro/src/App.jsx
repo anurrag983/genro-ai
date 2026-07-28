@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeft,
@@ -16,26 +16,27 @@ import {
   Clock,
   Dna,
   Edit3,
-  ExternalLink,
   FileCheck,
+  FileText,
   Flame,
   FlaskConical,
   Home,
   LogOut,
   Mail,
   MessageCircle,
+  Paperclip,
   Pencil,
   Phone,
   PlayCircle,
   RefreshCw,
   Rocket,
   Send,
+  Search,
   Sigma,
   Sparkles,
   Target,
   TrendingUp,
   Trophy,
-  Trash2,
   User,
   X,
   XCircle,
@@ -228,6 +229,43 @@ function normalizeProgressData(payload) {
   };
 }
 
+// SPEED FIX: Study and Custom Practice used to each keep their own private
+// per-component cache (a useRef Map), so leaving a page and coming back — or
+// simply switching between Study and Custom Practice — re-hit the backend
+// every time, and the render-blocking wait made opening a subject's chapters
+// feel slow. This cache lives at module scope, so it survives page switches
+// and unmounts, and in-flight requests are de-duped so tapping the same
+// subject twice never fires a second request.
+const syllabusCache = new Map();
+
+function syllabusCacheKey(classLevel, subjectName) {
+  return `${classLevel}:${subjectName}`;
+}
+
+function loadSyllabus(classLevel, subjectName) {
+  const key = syllabusCacheKey(classLevel, subjectName);
+  if (syllabusCache.has(key)) return syllabusCache.get(key);
+  const request = api.getSyllabus(classLevel, subjectName)
+    .then((response) => response.data || [])
+    .catch((error) => {
+      // Don't cache failures — a cold-started backend or a dropped request
+      // should be retried the next time this subject is opened.
+      syllabusCache.delete(key);
+      throw error;
+    });
+  syllabusCache.set(key, request);
+  return request;
+}
+
+// Quietly warms the cache for every subject on the student's track as soon as
+// the Study/Custom Practice area is opened, so tapping between subjects
+// afterwards feels instant instead of triggering a fresh fetch each time.
+function prefetchAllSubjects(classLevel, track) {
+  subjectsForTrack(track).forEach((subject) => {
+    loadSyllabus(classLevel, subject.apiName).catch(() => {});
+  });
+}
+
 function getSubjectStats(progressItems, subject) {
   const matching = (progressItems || []).filter((item) => canonicalSubject(item.subject_name) === subject);
   const attempts = matching.reduce((total, item) => total + displayNumber(item.tests_attempted, 1), 0);
@@ -345,7 +383,11 @@ function AuthScreen({ onAuthenticated }) {
       setIsSubmitting(true);
       try {
         const response = await api.sendOtp(form.mobile_no.trim());
-        setOtpHint(response.demo_mode && response.otp_debug ? `Demo OTP: ${response.otp_debug}` : '');
+        const debugOtp = response.otp_debug || '';
+        setOtpHint(debugOtp ? `Verification code: ${debugOtp}` : '');
+        if (debugOtp) {
+          setForm((current) => ({ ...current, otp: debugOtp }));
+        }
         setSignupStep('verify');
       } catch (requestError) {
         setError(requestError.message);
@@ -565,6 +607,9 @@ function LearningWorkspace({ initialUser, activePage, onPageChange, onUpdateSess
 
     loadWorkspace();
     return () => { isCurrent = false; };
+  // onUpdateSession is intentionally omitted — it's an inline function that
+  // re-creates on every render, adding it would cause an infinite reload loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialUser.user_id, reloadIndex]);
 
   const updateUser = (nextProfile) => {
@@ -585,7 +630,9 @@ function LearningWorkspace({ initialUser, activePage, onPageChange, onUpdateSess
     onPageChange(quizReturnPage);
   };
 
-  const pageTitle = quizDescriptor ? quizDescriptor.title : NAVIGATION.find((item) => item.id === activePage)?.label;
+  // Only show the quiz title while actually on the quiz page — navigating via
+  // sidebar should immediately show the correct page name.
+  const pageTitle = (activePage === 'quiz' && quizDescriptor) ? quizDescriptor.title : NAVIGATION.find((item) => item.id === activePage)?.label;
   const currentProgress = progress || emptyProgress();
 
   return (
@@ -596,7 +643,7 @@ function LearningWorkspace({ initialUser, activePage, onPageChange, onUpdateSess
           <span>genro</span><b>AI</b>
         </div>
         <nav className="side-nav" aria-label="Main navigation">
-          {NAVIGATION.map((item) => <NavigationButton key={item.id} item={item} active={activePage === item.id} onClick={() => onPageChange(item.id)} />)}
+          {NAVIGATION.map((item) => <NavigationButton key={item.id} item={item} active={activePage === item.id} onClick={() => { setQuizDescriptor(null); onPageChange(item.id); }} />)}
         </nav>
         <div className="sidebar-footer">
           <div className="api-status"><span className={dataError ? 'status-dot warning' : 'status-dot'} />{dataError ? 'Connection needs attention' : 'Genro server connected'}</div>
@@ -634,7 +681,7 @@ function LearningWorkspace({ initialUser, activePage, onPageChange, onUpdateSess
       </div>
 
       <nav className="mobile-nav" aria-label="Main navigation">
-        {NAVIGATION.map((item) => <NavigationButton key={item.id} item={item} active={activePage === item.id} onClick={() => onPageChange(item.id)} />)}
+        {NAVIGATION.map((item) => <NavigationButton key={item.id} item={item} active={activePage === item.id} onClick={() => { setQuizDescriptor(null); onPageChange(item.id); }} />)}
       </nav>
     </div>
   );
@@ -688,7 +735,10 @@ function OverviewPage({ user, dashboard, progress, isLoading, onNavigate }) {
             <div className="continue-content">
               <div className="topic-symbol">{subjectInitial(weakTopic.subject_name)}</div>
               <div className="continue-detail"><span>{weakTopic.subject_name || 'Study plan'} · {weakTopic.chapter_name || 'Revision'}</span><h4>{weakTopic.topic_name}</h4><p>{formatPercent(weakTopic.accuracy_percentage)} accuracy in {displayNumber(weakTopic.tests_attempted, 1)} recorded attempt{displayNumber(weakTopic.tests_attempted, 1) === 1 ? '' : 's'}.</p></div>
-              <button className="secondary-button compact" onClick={() => onNavigate('study')}>Open topic <ArrowRight size={16} /></button>
+              <div className="continue-actions">
+                <button className="secondary-button compact" onClick={() => onNavigate('study')}>Open topic <ArrowRight size={16} /></button>
+                <a className="video-rec-link" href={videoRecommendationFor(weakTopic).url} target="_blank" rel="noreferrer"><PlayCircle size={13} /> {videoRecommendationFor(weakTopic).isCurated ? 'Watch explainer' : 'Find a video'}</a>
+              </div>
             </div>
           ) : (
             <EmptyInline icon={BookOpen} title="Your plan is ready when you are" text="Choose Physics, Chemistry, or Biology and start following your class syllabus." actionLabel="Browse subjects" onAction={() => onNavigate('study')} />
@@ -736,60 +786,74 @@ function OverviewPage({ user, dashboard, progress, isLoading, onNavigate }) {
   );
 }
 
+// COLD-START FIX: the backend (Render free tier) can take a while to wake up
+// on its first request. A bare spinner with no explanation feels broken, so
+// after a few seconds of waiting we surface the same reassuring notice the
+// login screen already uses.
+function useColdStartNotice(isLoading, delayMs = 4000) {
+  const [notice, setNotice] = useState('');
+  useEffect(() => {
+    if (!isLoading) {
+      setNotice('');
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setNotice('This is taking longer than usual — the Genro server may be waking up. Hang tight, it should load in a moment.');
+    }, delayMs);
+    return () => window.clearTimeout(timeout);
+  }, [isLoading, delayMs]);
+  return notice;
+}
+
 function StudyPage({ user, progress, onStartQuiz }) {
   const [subject, setSubject] = useState('Physics');
   const [chapters, setChapters] = useState([]);
-  const [expandedChapter, setExpandedChapter] = useState(null);
+  const [openChapterId, setOpenChapterId] = useState(null);
   const [state, setState] = useState({ loading: true, error: '' });
-  const chapterCacheRef = useRef(new Map());
   const availableSubjects = subjectsForTrack(user.study_track);
   const selectedSubject = availableSubjects.find((item) => item.name === subject) || availableSubjects[0];
   const subjectStats = getSubjectStats(progress.all_progress, selectedSubject?.name);
+  const coldStartNotice = useColdStartNotice(state.loading);
 
   useEffect(() => {
     if (!availableSubjects.some((item) => item.name === subject)) {
       setSubject(availableSubjects[0]?.name || 'Physics');
     }
-  }, [subject, user.study_track]);
+  }, [subject, availableSubjects]);
+
+  // Warm the cache for every subject on this track as soon as Study opens, so
+  // switching subjects afterwards doesn't wait on a fresh request.
+  useEffect(() => {
+    prefetchAllSubjects(user.class_level, user.study_track);
+  }, [user.class_level, user.study_track]);
 
   useEffect(() => {
     let isCurrent = true;
     const subjectName = selectedSubject?.apiName || subject;
-    const cacheKey = `${user.class_level}:${subjectName}`;
-    const cachedChapters = chapterCacheRef.current.get(cacheKey);
-
-    if (cachedChapters) {
-      setChapters(cachedChapters);
-      setExpandedChapter(cachedChapters[0]?.chapter_id || null);
-      setState({ loading: false, error: '' });
-      return () => { isCurrent = false; };
-    }
-
     setState({ loading: true, error: '' });
-    setChapters([]);
-    setExpandedChapter(null);
+    setOpenChapterId(null);
 
-    api.getSyllabus(user.class_level, subjectName)
-      .then((response) => {
+    loadSyllabus(user.class_level, subjectName)
+      .then((nextChapters) => {
         if (!isCurrent) return;
-        const nextChapters = response.data || [];
-        chapterCacheRef.current.set(cacheKey, nextChapters);
         setChapters(nextChapters);
-        setExpandedChapter(nextChapters[0]?.chapter_id || null);
         setState({ loading: false, error: '' });
       })
       .catch((requestError) => {
         if (!isCurrent) return;
+        setChapters([]);
         setState({ loading: false, error: requestError.message });
       });
 
     return () => { isCurrent = false; };
   }, [subject, selectedSubject?.apiName, user.class_level]);
 
+  const openChapter = chapters.find((chapter) => chapter.chapter_id === openChapterId) || null;
+
   return (
     <div className="page-stack study-page">
       <section className="study-header">
-        <div><span className="eyebrow"><span className="eyebrow-dot" /> {user.class_level} SYLLABUS</span><h2>Build from the basics. Move with confidence.</h2><p>Choose a subject to see its chapter-and-topic sequence from the Genro API. Practice buttons activate when a test is available.</p></div>
+        <div><span className="eyebrow"><span className="eyebrow-dot" /> {user.class_level} SYLLABUS</span><h2>Build from the basics. Move with confidence.</h2><p>Choose a subject to see its chapter-and-topic sequence from the Genro API. Tap a chapter to see its topics — full chapter tests are ready to start right from the list.</p></div>
         <div className="study-badge"><BookOpen size={19} /><span><b>NCERT-aligned</b><small>Structured topic by topic</small></span></div>
       </section>
 
@@ -803,28 +867,53 @@ function StudyPage({ user, progress, onStartQuiz }) {
 
       <p className="subject-status-copy">{subjectStats.attempts ? `${formatPercent(subjectStats.accuracy)} average accuracy across ${subjectStats.attempts} recorded test${subjectStats.attempts === 1 ? '' : 's'} in ${selectedSubject?.name}.` : `No completed ${selectedSubject?.name || subject} tests yet.`}</p>
 
-      {state.loading ? <SyllabusSkeleton /> : state.error ? <RequestState icon={XCircle} title="We couldn't load this syllabus" text={state.error} /> : chapters.length === 0 ? <RequestState icon={BookOpen} title="No chapters are available yet" text="The backend did not return any syllabus chapters for this class and subject." /> : (
+      {state.loading ? <>{coldStartNotice && <InfoBanner message={coldStartNotice} />}<SyllabusSkeleton /></> : state.error ? <RequestState icon={XCircle} title="We couldn't load this syllabus" text={state.error} /> : chapters.length === 0 ? <RequestState icon={BookOpen} title="No chapters are available yet" text="The backend did not return any syllabus chapters for this class and subject." /> : openChapter ? (
+        <ChapterDetailView chapter={openChapter} onBack={() => setOpenChapterId(null)} onStartQuiz={onStartQuiz} />
+      ) : (
         <section className="chapter-list" aria-label={`${subject} chapters`}>
-          {chapters.map((chapter) => {
-            const isExpanded = expandedChapter === chapter.chapter_id;
-            const topicCount = chapter.topics?.length || 0;
-            return <article className={`chapter-card ${isExpanded ? 'expanded' : ''}`} key={chapter.chapter_id}>
-              <button className="chapter-toggle" onClick={() => setExpandedChapter(isExpanded ? null : chapter.chapter_id)} aria-expanded={isExpanded}>
-                <span className="chapter-number">{String(chapter.chapter_number).padStart(2, '0')}</span>
-                <span className="chapter-title"><small>CHAPTER {chapter.chapter_number} · {topicCount} TOPIC{topicCount === 1 ? '' : 'S'}</small><b>{chapter.chapter_name}</b></span>
-                <span className="chapter-actions">{chapter.has_chapter_test && <span className="available-pill">Test ready</span>}<ChevronDown size={19} /></span>
-              </button>
-              {isExpanded && <div className="topic-list">
-                {chapter.has_chapter_test && <ChapterTestRow chapter={chapter} onStartQuiz={onStartQuiz} />}
-                {chapter.topics?.map((topic, index) => <TopicRow key={topic.topic_id} topic={topic} index={index} chapter={chapter} onStartQuiz={onStartQuiz} />)}
-                {!topicCount && <p className="empty-topic">Topics for this chapter will appear here soon.</p>}
-              </div>}
-            </article>;
-          })}
+          {chapters.map((chapter) => <ChapterSummaryCard key={chapter.chapter_id} chapter={chapter} onOpen={() => setOpenChapterId(chapter.chapter_id)} onStartQuiz={onStartQuiz} />)}
         </section>
       )}
     </div>
   );
+}
+
+// A chapter row you tap to drill into its topics — the old design used an
+// expanding accordion with a rotating chevron; this instead navigates into a
+// dedicated chapter view (see ChapterDetailView) with a plain "open" arrow.
+// The full chapter test button lives right here, outside/before the drill-in,
+// so it's reachable without opening the chapter at all.
+const ChapterSummaryCard = memo(function ChapterSummaryCard({ chapter, onOpen, onStartQuiz }) {
+  const topicCount = chapter.topics?.length || 0;
+  return <article className="chapter-card chapter-summary-card">
+    <button className="chapter-open-row" onClick={onOpen}>
+      <span className="chapter-number">{String(chapter.chapter_number).padStart(2, '0')}</span>
+      <span className="chapter-title"><small>CHAPTER {chapter.chapter_number} · {topicCount} TOPIC{topicCount === 1 ? '' : 'S'}</small><b>{chapter.chapter_name}</b></span>
+      <span className="chapter-actions"><ChevronRight size={19} /></span>
+    </button>
+    {chapter.has_chapter_test && <div className="chapter-summary-footer">
+      <span className="available-pill">Full test ready</span>
+      <button className="practice-button ready" onClick={() => onStartQuiz({ id: chapter.chapter_id, kind: 'chapter', title: `${chapter.chapter_name} · Full test`, chapter: chapter.chapter_name })}>Practice full test <ArrowRight size={15} /></button>
+    </div>}
+  </article>;
+});
+
+// The drill-in destination: back button, chapter header, then a flat list of
+// topics (plus the full-chapter test again at the top, for convenience).
+function ChapterDetailView({ chapter, onBack, onStartQuiz }) {
+  const topicCount = chapter.topics?.length || 0;
+  return <section className="chapter-detail">
+    <button className="back-button chapter-detail-back" type="button" onClick={onBack}><ArrowLeft size={16} /> Back to chapters</button>
+    <div className="chapter-detail-head">
+      <span className="chapter-number">{String(chapter.chapter_number).padStart(2, '0')}</span>
+      <div><small className="card-kicker">CHAPTER {chapter.chapter_number} · {topicCount} TOPIC{topicCount === 1 ? '' : 'S'}</small><h3>{chapter.chapter_name}</h3></div>
+    </div>
+    <div className="topic-list chapter-detail-topics">
+      {chapter.has_chapter_test && <ChapterTestRow chapter={chapter} onStartQuiz={onStartQuiz} />}
+      {chapter.topics?.map((topic, index) => <TopicRow key={topic.topic_id} topic={topic} index={index} chapter={chapter} onStartQuiz={onStartQuiz} />)}
+      {!topicCount && <p className="empty-topic">Topics for this chapter will appear here soon.</p>}
+    </div>
+  </section>;
 }
 
 // Difficulty selection is switched off for now — Practice starts the test
@@ -839,7 +928,7 @@ function ChapterTestRow({ chapter, onStartQuiz }) {
   </div>;
 }
 
-function TopicRow({ topic, index, chapter, onStartQuiz }) {
+const TopicRow = memo(function TopicRow({ topic, index, chapter, onStartQuiz }) {
   const canPractice = Boolean(topic.has_test);
   return <div className="topic-row">
     <span className="topic-order">{String(index + 1).padStart(2, '0')}</span>
@@ -849,7 +938,7 @@ function TopicRow({ topic, index, chapter, onStartQuiz }) {
       <button className={canPractice ? 'practice-button ready' : 'practice-button'} disabled={!canPractice} onClick={() => onStartQuiz({ id: topic.topic_id, kind: 'topic', title: topic.topic_name, chapter: chapter.chapter_name })}>{canPractice ? <>Practice <ArrowRight size={15} /></> : 'Coming soon'}</button>
     </div>
   </div>;
-}
+});
 
 // Custom Practice: student picks any mix of topics (across one subject) —
 // QuizPage fetches each selected topic's file, combines every question into
@@ -860,43 +949,38 @@ function CustomPracticePage({ user, onStartQuiz }) {
   const [chapters, setChapters] = useState([]);
   const [state, setState] = useState({ loading: true, error: '' });
   const [selectedTopics, setSelectedTopics] = useState(new Map());
-  const chapterCacheRef = useRef(new Map());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [difficulty, setDifficulty] = useState('all');
   const availableSubjects = subjectsForTrack(user.study_track);
   const selectedSubject = availableSubjects.find((item) => item.name === subject) || availableSubjects[0];
+  const coldStartNotice = useColdStartNotice(state.loading);
 
   useEffect(() => {
     if (!availableSubjects.some((item) => item.name === subject)) {
       setSubject(availableSubjects[0]?.name || 'Physics');
     }
-  }, [subject, user.study_track]);
+  }, [subject, availableSubjects]);
 
-  // PERFORMANCE FIX: cache each subject's syllabus after the first load (same
-  // pattern as the Study page) so switching subjects back and forth doesn't
-  // re-hit the backend.
+  useEffect(() => {
+    prefetchAllSubjects(user.class_level, user.study_track);
+  }, [user.class_level, user.study_track]);
+
+  // Shares the same module-level cache as the Study page (see loadSyllabus),
+  // so a subject already opened there loads instantly here too.
   useEffect(() => {
     let isCurrent = true;
     const subjectName = selectedSubject?.apiName || subject;
-    const cacheKey = `${user.class_level}:${subjectName}`;
-    const cached = chapterCacheRef.current.get(cacheKey);
-
-    if (cached) {
-      setChapters(cached);
-      setState({ loading: false, error: '' });
-      return () => { isCurrent = false; };
-    }
-
     setState({ loading: true, error: '' });
-    setChapters([]);
-    api.getSyllabus(user.class_level, subjectName)
-      .then((response) => {
+
+    loadSyllabus(user.class_level, subjectName)
+      .then((nextChapters) => {
         if (!isCurrent) return;
-        const nextChapters = response.data || [];
-        chapterCacheRef.current.set(cacheKey, nextChapters);
         setChapters(nextChapters);
         setState({ loading: false, error: '' });
       })
       .catch((requestError) => {
         if (!isCurrent) return;
+        setChapters([]);
         setState({ loading: false, error: requestError.message });
       });
     return () => { isCurrent = false; };
@@ -927,15 +1011,30 @@ function CustomPracticePage({ user, onStartQuiz }) {
   const selectedCount = selectedTopics.size;
   const clearSelection = () => setSelectedTopics(new Map());
 
+  // SEARCH FIX: with many chapters/topics, scrolling to find one specific
+  // topic was tedious. Typing filters chapters down to just the matching
+  // topics (or keeps a whole chapter's topics if the chapter name itself
+  // matches), so a search like "taxon" jumps straight to what's relevant.
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+  const visibleChapters = !trimmedQuery ? chapters : chapters
+    .map((chapter) => {
+      const chapterMatches = chapter.chapter_name.toLowerCase().includes(trimmedQuery);
+      const matchingTopics = (chapter.topics || []).filter((topic) => topic.topic_name.toLowerCase().includes(trimmedQuery));
+      return { ...chapter, topics: chapterMatches ? chapter.topics : matchingTopics };
+    })
+    .filter((chapter) => (chapter.topics || []).length > 0);
+
   const startPractice = () => {
     const topicIds = [...selectedTopics.keys()];
     if (!topicIds.length) return;
+    const difficultyLabel = difficulty === 'all' ? '' : ` · ${difficulty[0].toUpperCase()}${difficulty.slice(1)}`;
     onStartQuiz({
-      id: topicIds.slice().sort((a, b) => a - b).join('-'),
+      id: `${topicIds.slice().sort((a, b) => a - b).join('-')}${difficulty !== 'all' ? `-${difficulty}` : ''}`,
       kind: 'custom',
       topics: topicIds,
+      difficulty,
       subject: selectedSubject?.name || subject,
-      title: `Custom Practice · ${topicIds.length} topic${topicIds.length === 1 ? '' : 's'}`,
+      title: `Custom Practice · ${topicIds.length} topic${topicIds.length === 1 ? '' : 's'}${difficultyLabel}`,
     });
   };
 
@@ -953,16 +1052,28 @@ function CustomPracticePage({ user, onStartQuiz }) {
         })}
       </div>
 
-      {state.loading ? <SyllabusSkeleton /> : state.error ? <RequestState icon={XCircle} title="We couldn't load this syllabus" text={state.error} /> : chapters.length === 0 ? <RequestState icon={BookOpen} title="No chapters are available yet" text="The backend did not return any syllabus chapters for this class and subject." /> : (
+      <div className="custom-search-row">
+        <div className="custom-search-box"><Search size={16} /><input type="text" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={`Search ${selectedSubject?.name || subject} topics…`} aria-label="Search topics" />{searchQuery && <button type="button" onClick={() => setSearchQuery('')} aria-label="Clear search"><X size={14} /></button>}</div>
+        <div className="difficulty-selector" role="radiogroup" aria-label="Difficulty">
+          {['all', 'easy', 'medium', 'tough'].map((level) => (
+            <button key={level} type="button" role="radio" aria-checked={difficulty === level} className={difficulty === level ? 'active' : ''} onClick={() => setDifficulty(level)}>{level === 'all' ? 'All' : `${level[0].toUpperCase()}${level.slice(1)}`}</button>
+          ))}
+        </div>
+      </div>
+
+      {state.loading ? <>{coldStartNotice && <InfoBanner message={coldStartNotice} />}<SyllabusSkeleton /></> : state.error ? <RequestState icon={XCircle} title="We couldn't load this syllabus" text={state.error} /> : chapters.length === 0 ? <RequestState icon={BookOpen} title="No chapters are available yet" text="The backend did not return any syllabus chapters for this class and subject." /> : visibleChapters.length === 0 ? <RequestState icon={Search} title="No topics match your search" text={`Try a different word, or clear the search to see every ${selectedSubject?.name || subject} topic again.`} /> : (
         <section className="chapter-list" aria-label={`${subject} chapters for custom practice`}>
-          {chapters.map((chapter) => {
+          {visibleChapters.map((chapter) => {
             const practicable = (chapter.topics || []).filter((topic) => topic.has_test);
             const chapterSelectedCount = practicable.filter((topic) => selectedTopics.has(topic.topic_id)).length;
             return <article className="chapter-card expanded" key={chapter.chapter_id}>
               <div className="chapter-toggle custom-chapter-head">
                 <span className="chapter-number">{String(chapter.chapter_number).padStart(2, '0')}</span>
                 <span className="chapter-title"><small>CHAPTER {chapter.chapter_number} · {practicable.length} PRACTICABLE</small><b>{chapter.chapter_name}</b></span>
-                <button type="button" className="text-button" disabled={!practicable.length} onClick={() => toggleChapterAll(chapter)}>{practicable.length && chapterSelectedCount === practicable.length ? 'Clear chapter' : 'Select all'}</button>
+                <div className="custom-chapter-actions">
+                  {chapter.has_chapter_test && <button type="button" className="practice-button ready" onClick={() => onStartQuiz({ id: chapter.chapter_id, kind: 'chapter', title: `${chapter.chapter_name} · Full test`, chapter: chapter.chapter_name })}>Full test <ArrowRight size={15} /></button>}
+                  <button type="button" className="text-button" disabled={!practicable.length} onClick={() => toggleChapterAll(chapter)}>{practicable.length && chapterSelectedCount === practicable.length ? 'Clear chapter' : 'Select all'}</button>
+                </div>
               </div>
               <div className="topic-list custom-topic-list">
                 {(chapter.topics || []).map((topic) => (
@@ -981,7 +1092,7 @@ function CustomPracticePage({ user, onStartQuiz }) {
 
       <section className="panel custom-practice-builder">
         <div className="panel-heading"><div><span className="card-kicker">YOUR SET</span><h3>{selectedCount} topic{selectedCount === 1 ? '' : 's'} selected</h3></div>{selectedCount > 0 && <button type="button" className="text-button" onClick={clearSelection}>Clear all</button>}</div>
-        <p className="muted custom-practice-hint">{selectedCount ? `Every question from these ${selectedCount} topic${selectedCount === 1 ? '' : 's'} will be combined into one shuffled test.` : 'Tick topics above to build your mix.'}</p>
+        <p className="muted custom-practice-hint">{selectedCount ? `Every ${difficulty === 'all' ? '' : `${difficulty} `}question from these ${selectedCount} topic${selectedCount === 1 ? '' : 's'} will be combined into one shuffled test.` : 'Tick topics above to build your mix.'}</p>
         <button className="primary-button custom-start-button" disabled={!selectedCount} onClick={startPractice}>Start custom practice <ArrowRight size={17} /></button>
       </section>
     </div>
@@ -1013,7 +1124,7 @@ function ProgressPage({ user, progress, isLoading, onNavigate }) {
 
     {!totalTests ? <section className="panel empty-progress"><EmptyInline icon={BarChart3} title={hasResponseData ? 'Your progress story starts with one test' : 'Progress data is not available yet'} text={hasResponseData ? "Head to your syllabus, look for a topic marked Practice, and complete it. We'll take care of the tracking." : 'Refresh this page after the Genro server finishes loading your saved test attempts.'} actionLabel="Open syllabus" onAction={() => onNavigate('study')} /></section> : <>
       <section className="content-grid two-column">
-        <TopicInsightPanel title="Revision queue" subtitle="Focus here next" icon={Target} tone="rose" topics={weakTopics} emptyText="Nothing urgent right now—nice work." />
+        <TopicInsightPanel title="Revision queue" subtitle="Focus here next" icon={Target} tone="rose" topics={weakTopics} emptyText="Nothing urgent right now—nice work." showVideoHelp />
         <TopicInsightPanel title="Growing strengths" subtitle="Keep this momentum" icon={Trophy} tone="green" topics={strongTopics} emptyText="Your strongest topics will show here after a few tests." />
       </section>
       <section className="panel history-panel">
@@ -1043,8 +1154,9 @@ function AttemptReportModal({ userId, attemptId, onClose }) {
   const reportQuestions = reportData?.answers?.map((row, index) => ({
     id: row.question_number || index,
     text: row.question_text,
-    options: row.options || [],
+    options: normalizeOptions(row.options || []),
     correctAnswer: row.correct_key,
+    topicName: row.topic_name || reportData?.topic_name || 'Practice topic',
   })) || [];
   const reportAnswers = Object.fromEntries((reportData?.answers || []).map((row, index) => [index, row.selected_key]));
 
@@ -1068,6 +1180,7 @@ function TutorPage({ user }) {
   const [state, setState] = useState({ loading: true, sending: false, error: '' });
   const endRef = useRef(null);
   const cameraInputRef = useRef(null);
+  const documentInputRef = useRef(null);
 
   useEffect(() => {
     let isCurrent = true;
@@ -1087,24 +1200,32 @@ function TutorPage({ user }) {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, state.sending]);
 
-  const handleCameraChange = (event) => {
+  // DOCUMENT ATTACH FIX: the only way to attach anything used to be the
+  // camera button, which forces the phone's live camera (capture="environment")
+  // and only accepts images — there was no way to attach an existing photo
+  // from the gallery or a PDF document, even though the backend has always
+  // supported PDFs (see sanitizeChatAttachment in server.js). handleAttachment
+  // now backs both the camera button and a separate document/gallery button.
+  const handleAttachment = (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setState((current) => ({ ...current, error: 'Please choose a photo of your study question.' }));
+    const isImage = file.type.startsWith('image/');
+    const isPdf = file.type === 'application/pdf';
+    if (!isImage && !isPdf) {
+      setState((current) => ({ ...current, error: 'Please choose a JPG, PNG, WebP photo or a PDF document.' }));
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setState((current) => ({ ...current, error: 'Use an image smaller than 5 MB so it can be sent safely.' }));
+      setState((current) => ({ ...current, error: 'Use a file smaller than 5 MB so it can be sent safely.' }));
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
-      setAttachment({ dataUrl: String(reader.result), name: file.name || 'study-question.jpg' });
+      setAttachment({ dataUrl: String(reader.result), name: file.name || (isPdf ? 'document.pdf' : 'study-question.jpg'), isPdf });
       setState((current) => ({ ...current, error: '' }));
     };
-    reader.onerror = () => setState((current) => ({ ...current, error: 'We could not read that photo. Please try again.' }));
+    reader.onerror = () => setState((current) => ({ ...current, error: 'We could not read that file. Please try again.' }));
     reader.readAsDataURL(file);
   };
 
@@ -1115,7 +1236,7 @@ function TutorPage({ user }) {
 
     const temporaryId = `local-${Date.now()}`;
     const pendingAttachment = attachment;
-    setMessages((current) => [...current, { id: temporaryId, role: 'user', text, pending: true, attachmentPreview: pendingAttachment?.dataUrl }]);
+    setMessages((current) => [...current, { id: temporaryId, role: 'user', text, pending: true, attachmentPreview: pendingAttachment?.dataUrl, attachmentIsPdf: Boolean(pendingAttachment?.isPdf), attachmentName: pendingAttachment?.name }]);
     setInput('');
     setAttachment(null);
     setState((current) => ({ ...current, sending: true, error: '' }));
@@ -1142,23 +1263,24 @@ function TutorPage({ user }) {
   const editMessage = async (message, messageText) => {
     try {
       setState((current) => ({ ...current, error: '' }));
-      await api.updateChat(user.user_id, message.id, messageText);
-      setMessages((current) => current.map((item) => item.id === message.id ? { ...item, text: messageText } : item));
+      const response = await api.updateChat(user.user_id, message.id, messageText);
+      const updatedUser = response.data?.user_message;
+      const updatedAi = response.data?.ai_message;
+      setMessages((current) => {
+        const userIndex = current.findIndex((item) => item.id === message.id);
+        if (userIndex < 0) return current;
+        const before = current.slice(0, userIndex);
+        const edited = updatedUser ? toChatMessage(updatedUser) : { ...current[userIndex], text: messageText };
+        // The backend replaces the reply, so remove every old AI bubble that
+        // belongs to this user message before inserting the fresh one.
+        let afterIndex = userIndex + 1;
+        while (afterIndex < current.length && current[afterIndex].role === 'ai') afterIndex += 1;
+        return [...before, edited, ...(updatedAi ? [toChatMessage(updatedAi)] : []), ...current.slice(afterIndex)];
+      });
       return true;
     } catch (requestError) {
       setState((current) => ({ ...current, error: requestError.message }));
       return false;
-    }
-  };
-
-  const deleteMessage = async (message) => {
-    if (!window.confirm('Delete this message from your chat history?')) return;
-    try {
-      setState((current) => ({ ...current, error: '' }));
-      await api.deleteChat(user.user_id, message.id);
-      setMessages((current) => current.filter((item) => item.id !== message.id));
-    } catch (requestError) {
-      setState((current) => ({ ...current, error: requestError.message }));
     }
   };
 
@@ -1169,16 +1291,23 @@ function TutorPage({ user }) {
       <div className="chat-messages">
         {state.loading ? <div className="chat-loading"><LoaderLabel text="Loading your conversation" /></div> : state.error && !hasMessages ? <RequestState icon={XCircle} title="We couldn't open your chat history" text={state.error} /> : <>
           {!hasMessages && <WelcomeMessage name={user.full_name} />}
-          {messages.map((message) => <ChatBubble message={message} key={message.id} onEdit={editMessage} onDelete={deleteMessage} />)}
+          {messages.map((message) => <ChatBubble message={message} key={message.id} onEdit={editMessage} />)}
           {state.sending && <div className="typing-indicator"><span /><span /><span /> Genro AI is thinking</div>}
         </>}
         <div ref={endRef} />
       </div>
       {!hasMessages && !state.loading && <div className="suggestion-row">{['Explain a difficult concept simply', 'Help me plan a 30-minute revision session', 'Give me a NEET-style practice strategy'].map((prompt) => <button key={prompt} onClick={() => setInput(prompt)}>{prompt}</button>)}</div>}
       {state.error && hasMessages && <AlertBanner message={state.error} compact />}
-      {attachment && <div className="chat-attachment-preview"><img src={attachment.dataUrl} alt="Selected study question" /><span>{attachment.name}</span><button type="button" onClick={() => setAttachment(null)} aria-label="Remove selected image"><X size={15} /></button></div>}
-      <form className="chat-composer" onSubmit={sendMessage}><input ref={cameraInputRef} className="sr-only" type="file" accept="image/*" capture="environment" onChange={handleCameraChange} /><button className="camera-button" type="button" onClick={() => cameraInputRef.current?.click()} aria-label="Take or attach a photo of a question" title="Take or attach a photo"><Camera size={18} /></button><textarea rows="1" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }} placeholder="Ask a study question…" aria-label="Message Genro AI" /><button className="send-button" type="submit" disabled={(!input.trim() && !attachment) || state.sending} aria-label="Send message"><Send size={18} /></button></form>
-      <p className="chat-footnote">Use the camera for a question image · Press Enter to send · Shift + Enter for a new line</p>
+      {attachment && <div className="chat-attachment-preview">{attachment.isPdf ? <span className="file-chip"><FileText size={18} /></span> : <img src={attachment.dataUrl} alt="Selected study question" />}<span>{attachment.name}</span><button type="button" onClick={() => setAttachment(null)} aria-label="Remove selected attachment"><X size={15} /></button></div>}
+      <form className="chat-composer" onSubmit={sendMessage}>
+        <input ref={cameraInputRef} className="sr-only" type="file" accept="image/*" onChange={handleAttachment} />
+        <input ref={documentInputRef} className="sr-only" type="file" accept="image/*,application/pdf" onChange={handleAttachment} />
+        <button className="camera-button" type="button" onClick={() => cameraInputRef.current?.click()} aria-label="Take or choose a photo of a question" title="Take or choose a photo"><Camera size={18} /></button>
+        <button className="attach-button" type="button" onClick={() => documentInputRef.current?.click()} aria-label="Attach a photo or PDF document" title="Attach a photo or document"><Paperclip size={18} /></button>
+        <textarea rows="1" value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(); } }} placeholder="Ask a study question…" aria-label="Message Genro AI" />
+        <button className="send-button" type="submit" disabled={(!input.trim() && !attachment) || state.sending} aria-label="Send message"><Send size={18} /></button>
+      </form>
+      <p className="chat-footnote">Camera for a quick photo · Paperclip to attach a photo or PDF · Enter to send · Shift + Enter for a new line</p>
     </section>
   </div>;
 }
@@ -1255,14 +1384,11 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
     // CUSTOM PRACTICE FIX: this used to fetch only the first selected topic
     // (it called the single-topic test route with just descriptor.id) and
     // silently ignored the rest of the student's mix. It now fetches every
-    // selected topic's question file and merges them into one pool.
+    // selected topic's question file and merges them into one pool, filtered
+    // by the difficulty chosen on the Custom Practice screen (if any).
     const loadQuestions = descriptor.kind === 'custom'
-      ? Promise.all((descriptor.topics || []).map((topicId) => (
-          api.getTest(topicId, 'topic')
-            .then((response) => response.data?.test_json_url ? fetchQuizPayload(response.data.test_json_url) : null)
-            .then((payload) => payload ? normalizeQuestions(payload) : [])
-            .catch(() => [])
-        ))).then((questionSets) => questionSets.flat())
+      ? api.getCustomTest(descriptor.topics || [], descriptor.difficulty || 'all')
+          .then((response) => normalizeQuestions(response.data?.questions || [], descriptor.difficulty))
       : api.getTest(descriptor.id, descriptor.kind)
           .then(async (response) => {
             const url = response.data?.test_json_url;
@@ -1273,9 +1399,7 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
 
     loadQuestions
       .then((rawQuestions) => {
-        // Difficulty selection is off for now — every available question in
-        // the file(s) is included, just shuffled into a fresh order.
-        const normalizedQuestions = shuffleArray(rawQuestions);
+        const normalizedQuestions = shuffleArray(rawQuestions).slice(0, 20);
         if (!normalizedQuestions.length) throw new Error('This practice set does not contain usable multiple-choice questions yet.');
         if (!isCurrent) return;
         setQuestions(normalizedQuestions);
@@ -1286,7 +1410,7 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
         setState({ loading: false, error: requestError.message, submitted: false, saving: false, saveError: '' });
       });
     return () => { isCurrent = false; };
-  }, [descriptor?.id, descriptor?.kind]);
+  }, [descriptor?.id, descriptor?.kind, descriptor?.difficulty]);
 
   useEffect(() => {
     if (state.loading || state.submitted || !questions.length) return undefined;
@@ -1303,7 +1427,7 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
   const isLastQuestion = currentIndex === questions.length - 1;
 
   const [savedAttemptId, setSavedAttemptId] = useState(null);
-  const chooseAnswer = (key) => setAnswers((current) => ({ ...current, [currentIndex]: key }));
+  const chooseAnswer = useCallback((key) => setAnswers((current) => ({ ...current, [currentIndex]: key })), [currentIndex]);
   const skipQuestion = () => {
     setAnswers((current) => {
       const next = { ...current };
@@ -1320,6 +1444,7 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
       // bhej rahe hain, taaki baad mein Progress page se dobara review kiya ja sake.
       const answerDetails = questions.map((question, index) => ({
         question_text: question.text,
+        topic_name: question.topicName || '',
         options: question.options,
         selected_key: answers[index] || null,
         correct_key: question.correctAnswer || null,
@@ -1331,6 +1456,7 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
         status: accuracy >= 70 ? 'Mastered' : 'Revision Required',
         accuracy_percentage: accuracy,
         xp_earned: Math.max(10, score * 10),
+        difficulty: descriptor.difficulty || 'Medium',
         answers: answerDetails,
       };
       const payload = descriptor.kind === 'chapter'
@@ -1356,28 +1482,42 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
   }
 
   return <div className="quiz-page">
-    <div className="quiz-topline"><button className="back-button" onClick={onBack}><ArrowLeft size={17} /> Back to syllabus</button><span><Clock size={16} /> {formatElapsedTime(elapsedSeconds)}</span></div>
+    <div className="quiz-topline"><button className="quiz-exit-button" onClick={onBack}><ArrowLeft size={16} /> Leave practice</button><span><Clock size={16} /> {formatElapsedTime(elapsedSeconds)}</span></div>
     <section className="quiz-card">
       <div className="quiz-heading"><div><span className="eyebrow">LIVE PRACTICE · {descriptor.chapter || 'TOPIC TEST'}</span><h2>{descriptor.title}</h2></div><span className="question-count">{currentIndex + 1} <small>/ {questions.length}</small></span></div>
       <div className="question-progress"><span style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }} /></div>
       <div className="question-nav" aria-label="Question palette">{questions.map((question, index) => <button key={question.id || index} className={`${currentIndex === index ? 'current' : ''} ${answers[index] ? 'answered' : ''}`} onClick={() => setCurrentIndex(index)}>{index + 1}</button>)}</div>
       <div className="question-body">
         <div className="question-body-head"><span className="question-label">QUESTION {currentIndex + 1}</span><button type="button" className="skip-button" onClick={skipQuestion}>{isLastQuestion ? 'Skip & submit' : 'Skip question'} <ArrowRight size={13} /></button></div>
-        <h3>{currentQuestion.text}</h3>
-        <div className="answers-list">{currentQuestion.options.map((option) => <button key={option.key} className={answers[currentIndex] === option.key ? 'selected' : ''} onClick={() => chooseAnswer(option.key)}><span>{option.key}</span><p>{option.text}</p><i>{answers[currentIndex] === option.key && <Check size={15} />}</i></button>)}</div>
+        <h3>{cleanMathText(currentQuestion.text)}</h3>
+        <div className="answers-list">{currentQuestion.options.map((option) => <button key={option.key} className={answers[currentIndex] === option.key ? 'selected' : ''} onClick={() => chooseAnswer(option.key)}><span>{option.key}</span><p>{cleanMathText(option.text)}</p><i>{answers[currentIndex] === option.key && <Check size={15} />}</i></button>)}</div>
       </div>
       <div className="quiz-actions"><button className="secondary-button" onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))} disabled={currentIndex === 0}><ArrowLeft size={16} /> Previous</button><span>{answeredCount} of {questions.length} answered</span><button className="primary-button" onClick={() => isLastQuestion ? submitQuiz() : setCurrentIndex((index) => index + 1)}>{isLastQuestion ? 'Submit practice' : <>Next question <ArrowRight size={16} /></>}</button></div>
     </section>
   </div>;
 }
 
-function QuizResults({ descriptor, questions, answers, score, accuracy, elapsedSeconds, state, onBack, attemptId }) {
+function QuizResults({ descriptor, questions, answers, score, accuracy, elapsedSeconds, state, onBack }) {
   const unanswered = questions.length - Object.keys(answers).length;
-  const [showReport, setShowReport] = useState(false);
+  const [showReport, setShowReport] = useState(true);
   const savingLabel = state.saving ? 'Saving your test result…' : state.saveError ? 'Result saved locally only' : 'Your result is in your progress history';
+  const avgSecondsPerQuestion = questions.length ? Math.round(elapsedSeconds / questions.length) : 0;
+  const performanceTone = accuracy >= 70 ? 'high' : accuracy >= 40 ? 'medium' : 'low';
   return <div className="quiz-results">
-    <section className="result-hero"><span className="result-icon"><Trophy size={29} /></span><span className="eyebrow">PRACTICE COMPLETE</span><h2>{accuracy >= 70 ? 'That was a strong effort.' : 'Every result gives you a better next step.'}</h2><p>{descriptor.title} · {questions.length} questions · {formatElapsedTime(elapsedSeconds)}</p></section>
-    <section className="result-grid"><article><span className="card-kicker">SCORE</span><strong>{score}<small> / {questions.length}</small></strong></article><article><span className="card-kicker">ACCURACY</span><strong>{accuracy}<small>%</small></strong></article><article><span className="card-kicker">UNANSWERED</span><strong>{unanswered}</strong></article></section>
+    <section className="result-hero">
+      <div className="accuracy-ring" style={{ '--pct': Math.max(0, Math.min(100, accuracy)) }}><span>{accuracy}<small>%</small></span></div>
+      <div className="result-hero-copy">
+        <span className="eyebrow">PRACTICE COMPLETE</span>
+        <h2>{accuracy >= 70 ? 'That was a strong effort.' : accuracy >= 40 ? 'Good progress — a bit more practice will help.' : 'Every result gives you a better next step.'}</h2>
+        <p>{descriptor.title} · {questions.length} questions · {formatElapsedTime(elapsedSeconds)}</p>
+      </div>
+    </section>
+    <section className="result-grid">
+      <article><span className="card-kicker">SCORE</span><strong>{score}<small> / {questions.length}</small></strong></article>
+      <article><span className="card-kicker">ACCURACY</span><strong className={`tone-${performanceTone}`}>{accuracy}<small>%</small></strong></article>
+      <article><span className="card-kicker">UNANSWERED</span><strong>{unanswered}</strong></article>
+      <article><span className="card-kicker">TIME PER QUESTION</span><strong>{formatPaceLabel(avgSecondsPerQuestion)}</strong></article>
+    </section>
     <section className="panel result-summary"><div className="panel-heading"><div><span className="card-kicker">SAVED PROGRESS</span><h3>{savingLabel}</h3></div><span className="panel-icon teal"><CheckCircle size={19} /></span></div>{!state.saving && !state.saveError && <p className="success-copy"><Check size={15} /> Accuracy and XP were sent to the Genro backend.</p>}{state.saveError && <AlertBanner message={`We could not save this result: ${state.saveError}`} compact />}
       <div className="result-summary-actions">
         <button className="secondary-button" type="button" onClick={() => setShowReport((value) => !value)}>{showReport ? 'Hide' : 'View'} detailed report <ChevronDown size={16} className={showReport ? 'chevron-flip' : ''} /></button>
@@ -1402,22 +1542,44 @@ const REPORT_FILTERS = [
 
 function TestReportView({ questions, answers }) {
   const [filter, setFilter] = useState('all');
-  const tagged = questions.map((question, index) => {
+  const tagged = useMemo(() => questions.map((question, index) => {
     const selected = answers[index] || null;
     const correct = question.correctAnswer || null;
     const isRight = isCorrectAnswer(selected, correct);
     const tone = selected ? (isRight ? 'correct' : 'wrong') : 'skipped';
     return { question, index, selected, correct, isRight, tone };
-  });
+  }), [questions, answers]);
   const counts = tagged.reduce((totals, item) => ({ ...totals, [item.tone]: (totals[item.tone] || 0) + 1 }), { correct: 0, wrong: 0, skipped: 0 });
   const visible = filter === 'all' ? tagged : tagged.filter((item) => item.tone === filter);
+  const topicPerformance = useMemo(() => {
+    const groups = new Map();
+    tagged.forEach((item) => {
+      const name = item.question.topicName || item.question.topic_name || item.question.topic || item.question.section || 'Practice topic';
+      const group = groups.get(name) || { topic_name: name, correct: 0, total: 0 };
+      group.total += 1;
+      if (item.isRight) group.correct += 1;
+      groups.set(name, group);
+    });
+    return [...groups.values()].map((item) => ({ ...item, accuracy: Math.round((item.correct / item.total) * 100) }));
+  }, [tagged]);
+  const weakTopics = topicPerformance.filter((item) => item.accuracy < 70);
+  const strongTopics = topicPerformance.filter((item) => item.accuracy >= 70);
 
   return <section className="panel test-report">
     <div className="panel-heading"><div><span className="card-kicker">DETAILED REPORT</span><h3>Question-by-question review</h3></div><span className="panel-icon violet"><BookOpen size={19} /></span></div>
+    <div className="report-breakdown-bar" role="img" aria-label={`${counts.correct} correct, ${counts.wrong} incorrect, ${counts.skipped} skipped out of ${questions.length} questions`}>
+      {counts.correct > 0 && <span className="correct" style={{ width: `${(counts.correct / questions.length) * 100}%` }} />}
+      {counts.wrong > 0 && <span className="wrong" style={{ width: `${(counts.wrong / questions.length) * 100}%` }} />}
+      {counts.skipped > 0 && <span className="skipped" style={{ width: `${(counts.skipped / questions.length) * 100}%` }} />}
+    </div>
     <div className="report-summary-strip">
       <div className="report-summary-stat correct"><strong>{counts.correct}</strong><span>Correct</span></div>
       <div className="report-summary-stat wrong"><strong>{counts.wrong}</strong><span>Incorrect</span></div>
       <div className="report-summary-stat skipped"><strong>{counts.skipped}</strong><span>Skipped</span></div>
+    </div>
+    <div className="report-topic-insights">
+      <div><b>Strong topics</b>{strongTopics.length ? strongTopics.map((topic) => <span key={topic.topic_name}>{topic.topic_name} · {topic.accuracy}%</span>) : <span>Keep practising to identify strengths.</span>}</div>
+      <div className="weak-topic-report"><b>Weak topics</b>{weakTopics.length ? weakTopics.map((topic) => <span key={topic.topic_name}><em>{topic.topic_name} · {topic.accuracy}%</em><a className="video-rec-link" href={videoRecommendationFor(topic).url} target="_blank" rel="noreferrer"><PlayCircle size={13} /> Play video</a></span>) : <span>No weak topics in this attempt.</span>}</div>
     </div>
     <div className="report-filter-row" role="tablist" aria-label="Filter questions">
       {REPORT_FILTERS.map((item) => <button key={item.key} type="button" role="tab" aria-selected={filter === item.key} className={filter === item.key ? 'active' : ''} onClick={() => setFilter(item.key)}>{item.label}{item.key !== 'all' ? ` (${counts[item.key] || 0})` : ''}</button>)}
@@ -1427,12 +1589,12 @@ function TestReportView({ questions, answers }) {
       {visible.map(({ question, index, selected, correct, isRight, tone }) => (
         <article className={`report-item ${tone}`} key={question.id || index}>
           <div className="report-item-head"><span className="report-q-number">Q{index + 1}</span><span className={`report-status-pill ${tone}`}>{selected ? (isRight ? <><Check size={13} /> Correct</> : <><X size={13} /> Incorrect</>) : 'Not answered'}</span></div>
-          <p className="report-question-text">{question.text}</p>
+          <p className="report-question-text">{cleanMathText(question.text)}</p>
           <div className="report-options">
             {question.options.map((option) => {
               const isSelected = selected === option.key;
               const isCorrectOption = correct === option.key;
-              return <div key={option.key} className={`report-option ${isCorrectOption ? 'is-correct' : ''} ${isSelected && !isCorrectOption ? 'is-selected-wrong' : ''}`}><span>{option.key}</span><p>{option.text}</p>{isCorrectOption && <Check size={14} />}{isSelected && !isCorrectOption && <X size={14} />}</div>;
+              return <div key={option.key} className={`report-option ${isCorrectOption ? 'is-correct' : ''} ${isSelected && !isCorrectOption ? 'is-selected-wrong' : ''}`}><span>{option.key}</span><p>{cleanMathText(option.text)}</p>{isCorrectOption && <Check size={14} />}{isSelected && !isCorrectOption && <X size={14} />}</div>;
             })}
           </div>
         </article>
@@ -1445,8 +1607,26 @@ function MetricCard({ icon: Icon, label, value, detail, tone, loading }) {
   return <article className={`metric-card ${tone}`}><span className="metric-icon"><Icon size={19} /></span><div><span>{label}</span>{loading ? <span className="metric-skeleton" /> : <strong>{value}</strong>}<small>{detail}</small></div></article>;
 }
 
-function TopicInsightPanel({ title, subtitle, icon: Icon, tone, topics, emptyText }) {
-  return <article className={`panel topic-insight ${tone}`}><div className="panel-heading"><div><span className="card-kicker">{subtitle}</span><h3>{title}</h3></div><span className={`panel-icon ${tone}`}><Icon size={19} /></span></div>{topics.length ? <div className="insight-list">{topics.slice(0, 4).map((topic) => <div className="insight-item" key={topic.progress_id || topic.topic_id}><div><b>{topic.topic_name}</b><span>{topic.subject_name} · {topic.chapter_name}</span></div><AccuracyBadge value={topic.accuracy_percentage} /></div>)}</div> : <p className="muted empty-copy">{emptyText}</p>}</article>;
+// WEAK TOPIC FIX: the backend has always sent back a topic's video_url (see
+// the JOIN in /api/user/:user_id/progress), but nothing in the UI used it —
+// weak topics were listed with no way to act on them. This builds a
+// recommendation link for each weak topic: the content team's own curated
+// video if one is set on that topic, otherwise a YouTube search built from
+// the topic + subject + class, so a recommendation is always available.
+function videoRecommendationFor(topic) {
+  if (topic.video_url) return { url: topic.video_url, isCurated: true };
+  const query = [topic.topic_name, topic.chapter_name, topic.subject_name, 'concept explained'].filter(Boolean).join(' ');
+  return { url: `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, isCurated: false };
+}
+
+function TopicInsightPanel({ title, subtitle, icon: Icon, tone, topics, emptyText, showVideoHelp = false }) {
+  return <article className={`panel topic-insight ${tone}`}><div className="panel-heading"><div><span className="card-kicker">{subtitle}</span><h3>{title}</h3></div><span className={`panel-icon ${tone}`}><Icon size={19} /></span></div>{topics.length ? <div className="insight-list">{topics.slice(0, 4).map((topic) => {
+    const video = showVideoHelp ? videoRecommendationFor(topic) : null;
+    return <div className="insight-item" key={topic.progress_id || topic.topic_id}>
+      <div><b>{topic.topic_name}</b><span>{topic.subject_name} · {topic.chapter_name}</span></div>
+      <div className="insight-item-side"><AccuracyBadge value={topic.accuracy_percentage} />{video && <a className="video-rec-link" href={video.url} target="_blank" rel="noreferrer"><PlayCircle size={13} /> {video.isCurated ? 'Watch explainer' : 'Find a video'}</a>}</div>
+    </div>;
+  })}</div> : <p className="muted empty-copy">{emptyText}</p>}</article>;
 }
 
 function ActivityRow({ item }) {
@@ -1512,10 +1692,13 @@ function WelcomeMessage({ name }) {
   return <div className="welcome-message"><span className="chat-bot-icon"><Bot size={20} /></span><div><span className="card-kicker">GENRO AI</span><h3>Hi {name.split(' ')[0]}, what are we working through today?</h3><p>I can explain a concept, help you structure revision, or break a difficult question into simpler steps.</p></div></div>;
 }
 
-function ChatBubble({ message, onEdit, onDelete }) {
+function ChatBubble({ message, onEdit }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.text);
+  // Delete was removed from the UI on purpose — messages can still be edited,
+  // but not removed from history.
   const canManage = message.role === 'user' && !message.pending && !message.failed && !String(message.id).startsWith('local-');
+  const hasAttachment = Boolean(message.attachmentPreview || message.attachmentUrl);
 
   useEffect(() => { setDraft(message.text); }, [message.text]);
 
@@ -1530,9 +1713,9 @@ function ChatBubble({ message, onEdit, onDelete }) {
   };
 
   return <div className={`chat-bubble-row ${message.role === 'user' ? 'from-user' : 'from-ai'}`}><span className="chat-message-avatar">{message.role === 'user' ? <User size={15} /> : <Bot size={15} />}</span><div className={`chat-bubble ${message.pending ? 'pending' : ''} ${message.failed ? 'failed' : ''}`}>
-    {editing ? <div className="chat-edit-form"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows="2" aria-label="Edit your message" /><div><button type="button" onClick={() => { setDraft(message.text); setEditing(false); }}>Cancel</button><button type="button" onClick={saveEdit} disabled={!draft.trim()}>Save</button></div></div> : <><p>{message.text}</p>{(message.attachmentPreview || message.attachmentUrl) && <img className="chat-attachment" src={message.attachmentPreview || `${API_BASE_URL}${message.attachmentUrl}`} alt="Attached study question" />}</>}
+    {editing ? <div className="chat-edit-form"><textarea value={draft} onChange={(event) => setDraft(event.target.value)} rows="2" aria-label="Edit your message" /><div><button type="button" onClick={() => { setDraft(message.text); setEditing(false); }}>Cancel</button><button type="button" onClick={saveEdit} disabled={!draft.trim()}>Save</button></div></div> : <><p>{message.text}</p>{hasAttachment && (message.attachmentIsPdf ? <a className="chat-attachment-file" href={message.attachmentPreview || `${API_BASE_URL}${message.attachmentUrl}`} target="_blank" rel="noreferrer"><FileText size={15} /><span>{message.attachmentName || 'Document.pdf'}</span></a> : <img className="chat-attachment" src={message.attachmentPreview || `${API_BASE_URL}${message.attachmentUrl}`} alt="Attached study question" />)}</>}
     {message.failed && <small>Not sent. Please try again.</small>}
-    {canManage && !editing && <div className="chat-message-controls"><button type="button" onClick={() => setEditing(true)} aria-label="Edit message" title="Edit message"><Pencil size={13} /></button><button type="button" onClick={() => onDelete(message)} aria-label="Delete message" title="Delete message"><Trash2 size={13} /></button></div>}
+    {canManage && !editing && <div className="chat-message-controls"><button type="button" onClick={() => setEditing(true)} aria-label="Edit message" title="Edit message"><Pencil size={13} /></button></div>}
   </div></div>;
 }
 
@@ -1542,6 +1725,7 @@ function toChatMessage(message) {
     role: message.sender_type === 'User' ? 'user' : 'ai',
     text: message.message_text,
     attachmentUrl: message.attachment_url || null,
+    attachmentIsPdf: message.attachment_mime === 'application/pdf',
   };
 }
 
@@ -1563,6 +1747,14 @@ function formatElapsedTime(totalSeconds) {
   return `${minutes}:${seconds}`;
 }
 
+// "Avg. pace" used to just show a bare number with no unit context ("42"),
+// which read as unclear. This spells out what it means: seconds per question
+// under a minute, minutes:seconds once it's slower than that.
+function formatPaceLabel(avgSecondsPerQuestion) {
+  if (avgSecondsPerQuestion < 60) return `${avgSecondsPerQuestion}s / question`;
+  return `${formatElapsedTime(avgSecondsPerQuestion)} / question`;
+}
+
 // Different content creators structure their chapter JSON files differently.
 // Some (e.g. chemical_kinetics.json) give one flat "questions" array where
 // each question carries its own difficulty field. Others (e.g.
@@ -1571,35 +1763,58 @@ function formatElapsedTime(totalSeconds) {
 // the second shape anywhere in the payload and returns just the branch that
 // matches the difficulty the student picked, so we never mix all three
 // difficulties into one quiz.
-function findDifficultyBranch(value, targetDifficulty, depth = 0) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || depth > 6) return null;
-  const keys = Object.keys(value);
-  const lowerKeys = keys.map((key) => key.toLowerCase());
-  const difficultyMatches = ['easy', 'medium', 'hard'].filter((label) => lowerKeys.includes(label)).length;
-
-  if (difficultyMatches >= 2) {
-    const wantedKey = keys.find((key) => key.toLowerCase() === String(targetDifficulty || '').toLowerCase());
-    return wantedKey ? { branch: value[wantedKey], matchedByStructure: true } : { branch: null, matchedByStructure: true };
-  }
-
-  for (const key of keys) {
-    const found = findDifficultyBranch(value[key], targetDifficulty, depth + 1);
-    if (found) return found;
-  }
-  return null;
+function canonicalDifficulty(value) {
+  const label = String(value || '').toLowerCase().trim();
+  if (['hard', 'tough', 'difficult', 'advanced'].includes(label)) return 'hard';
+  if (['medium', 'moderate'].includes(label)) return 'medium';
+  if (['easy', 'basic'].includes(label)) return 'easy';
+  return '';
 }
 
-function collectQuestionCandidates(value, candidates = []) {
+function findDifficultyBranch(value, targetDifficulty, depth = 0, collected = { found: false, items: [] }, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || depth > 40 || seen.has(value)) return collected;
+  seen.add(value);
   if (Array.isArray(value)) {
-    value.forEach((item) => collectQuestionCandidates(item, candidates));
+    value.forEach((item) => findDifficultyBranch(item, targetDifficulty, depth + 1, collected, seen));
+    return collected;
+  }
+  if (typeof value !== 'object') return collected;
+  const keys = Object.keys(value);
+  const difficultyMatches = keys.filter((key) => canonicalDifficulty(key)).length;
+
+  if (difficultyMatches >= 1) {
+    collected.found = true;
+    const wantedKey = keys.find((key) => canonicalDifficulty(key) === canonicalDifficulty(targetDifficulty));
+    if (wantedKey && targetDifficulty && String(targetDifficulty).toLowerCase() !== 'all') {
+      const branchValue = value[wantedKey];
+      if (Array.isArray(branchValue)) collected.items.push(...branchValue);
+      else if (branchValue) collected.items.push(branchValue);
+    }
+    return collected; // this node is a difficulty grouping — don't also treat its siblings as separate sections
+  }
+
+  Object.values(value).forEach((item) => findDifficultyBranch(item, targetDifficulty, depth + 1, collected, seen));
+  return collected;
+}
+
+function collectQuestionCandidates(value, candidates = [], inherited = {}, depth = 0, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || depth > 40 || seen.has(value)) return candidates;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectQuestionCandidates(item, candidates, inherited, depth + 1, seen));
     return candidates;
   }
-  if (!value || typeof value !== 'object') return candidates;
-  if (typeof value.question === 'string' || typeof value.question_text === 'string' || typeof value.text === 'string') {
-    candidates.push(value);
+  const text = value.question || value.question_text || value.questionText || value.prompt || value.stem || value.text;
+  if (typeof text === 'string' && (value.options || value.answers || value.choices || value.correct_answer || value.answer)) {
+    candidates.push({ ...inherited, ...value });
     return candidates;
   }
-  Object.values(value).forEach((item) => collectQuestionCandidates(item, candidates));
+  const topic = value.topic || value.topic_name || value.topicName || value.subtopic || value.sub_topic || value.section || value.section_name || inherited.__inheritedTopic;
+  const difficulty = value.difficulty || value.level || inherited.__inheritedDifficulty;
+  Object.entries(value).forEach(([key, item]) => collectQuestionCandidates(item, candidates, {
+    __inheritedTopic: topic,
+    __inheritedDifficulty: canonicalDifficulty(key) || difficulty,
+  }, depth + 1, seen));
   return candidates;
 }
 
@@ -1619,18 +1834,19 @@ function shuffleArray(source) {
 function normalizeQuestions(payload, difficulty) {
   const root = payload?.questions || payload?.data || payload;
 
-  // First, see if the JSON is structured with explicit Easy/Medium/Hard
-  // branches anywhere inside it. If so, only look at the branch for the
-  // requested difficulty.
+  // First, see if the JSON is structured with explicit Easy/Medium/Hard/Tough
+  // branches anywhere inside it (possibly repeated once per section/topic —
+  // all matching branches are merged together). If so, only look at the
+  // questions for the requested difficulty.
   const difficultyBranch = findDifficultyBranch(root, difficulty);
-  const searchRoot = difficultyBranch?.branch ?? root;
+  const searchRoot = difficultyBranch.found ? difficultyBranch.items : root;
 
   let candidates = collectQuestionCandidates(searchRoot);
 
   // If the structured branch existed but had nothing in it (e.g. difficulty
   // not yet filled in by the content creator), fall back to the whole file
   // rather than showing an empty test.
-  if (difficultyBranch && difficultyBranch.matchedByStructure && !candidates.length) {
+  if (difficultyBranch.found && !candidates.length) {
     candidates = collectQuestionCandidates(root);
   }
 
@@ -1638,10 +1854,11 @@ function normalizeQuestions(payload, difficulty) {
     const options = normalizeOptions(question.options || question.answers || question.choices);
     return {
       id: question.id || question.question_id || index + 1,
-      text: question.question || question.question_text || question.text,
-      options,
-      correctAnswer: normalizeAnswerKey(question.correct_answer || question.answer || question.correctOption || question.correct_option),
-      difficulty: question.difficulty || question.level || '',
+      text: cleanMathText(question.question || question.question_text || question.questionText || question.prompt || question.stem || question.text),
+      options: options.map((opt) => ({ key: opt.key, text: cleanMathText(opt.text) })),
+      correctAnswer: resolveCorrectAnswer(question.correct_answer || question.answer || question.correctOption || question.correct_option, options),
+      difficulty: question.difficulty || question.level || question.__inheritedDifficulty || '',
+      topicName: question.__inheritedTopic || question.topic_name || question.topic || question.section || question.section_name || '',
     };
   }).filter((question) => question.text && question.options.length >= 2);
 
@@ -1649,11 +1866,11 @@ function normalizeQuestions(payload, difficulty) {
   // "difficulty" field instead of being grouped under Easy/Medium/Hard keys.
   // Only filter this way if we didn't already narrow things down via a
   // structural branch above (avoids double-filtering / accidental empties).
-  if (!difficultyBranch && difficulty) {
+  if (!difficultyBranch.found && difficulty) {
     const taggedQuestions = questions.filter((question) => question.difficulty);
     if (taggedQuestions.length) {
       const filtered = questions.filter((question) => (
-        !question.difficulty || String(question.difficulty).toLowerCase() === String(difficulty).toLowerCase()
+        !question.difficulty || canonicalDifficulty(question.difficulty) === canonicalDifficulty(difficulty)
       ));
       // Only use the filtered set if it actually leaves us something to
       // practice with — never hand back an empty quiz just because the
@@ -1677,6 +1894,68 @@ function normalizeOptions(source) {
     return Object.entries(source).map(([key, value], index) => ({ key: normalizeAnswerKey(key) || String.fromCharCode(65 + index), text: typeof value === 'object' ? value.text || value.value || '' : String(value) }));
   }
   return [];
+}
+
+function resolveCorrectAnswer(answer, options) {
+  const key = normalizeAnswerKey(answer);
+  if (key && options.some((option) => option.key === key)) return key;
+  const wanted = cleanMathText(answer).replace(/\s+/g, ' ').trim().toLowerCase();
+  const match = options.find((option) => cleanMathText(option.text).replace(/\s+/g, ' ').trim().toLowerCase() === wanted);
+  return match?.key || key;
+}
+
+// Question banks use LaTeX strings, but the app intentionally has no heavy
+// math renderer. Convert the common notation to readable Unicode instead of
+// showing students raw backslashes and dollar signs.
+function cleanMathText(value) {
+  if (value === undefined || value === null) return '';
+  return String(value)
+    .replace(/\\vec\{([A-Za-z0-9_+-]+)\}/g, '$1')
+    .replace(/\\vec\s*([A-Za-z0-9])/g, '$1')
+    .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1)/($2)')
+    .replace(/\\sqrt\{([^}]+)\}/g, '√($1)')
+    .replace(/\\lambda/g, 'λ')
+    .replace(/\\sigma/g, 'σ')
+    .replace(/\\epsilon/g, 'ε')
+    .replace(/\\theta/g, 'θ')
+    .replace(/\\pi/g, 'π')
+    .replace(/\\infty/g, '∞')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\neq/g, '≠')
+    .replace(/\\pm/g, '±')
+    .replace(/\\approx/g, '≈')
+    .replace(/\\times/g, '×')
+    .replace(/\\le/g, '≤')
+    .replace(/\\ge/g, '≥')
+    .replace(/\\Delta/g, 'Δ')
+    .replace(/\\alpha/g, 'α')
+    .replace(/\\beta/g, 'β')
+    .replace(/\\gamma/g, 'γ')
+    .replace(/\\mu/g, 'μ')
+    .replace(/\\omega/g, 'ω')
+    .replace(/\\tau/g, 'τ')
+    .replace(/\\phi/g, 'ϕ')
+    .replace(/\\psi/g, 'ψ')
+    .replace(/\\rho/g, 'ρ')
+    .replace(/\\rightarrow|->/g, '→')
+    .replace(/\\Rightarrow|=>/g, '⇒')
+    .replace(/[\\$]/g, '')
+    .replace(/_\{?([0-9a-zA-Z+-]+)\}?/g, (_, match) => {
+      const map = {
+        '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+        '+': '₊', '-': '₋', 'a': 'ₐ', 'e': 'ₑ', 'i': 'ᵢ', 'o': 'ₒ', 'u': 'ᵤ', 'x': 'ₓ', 'p': 'ₚ', 'q': 'q',
+      };
+      return [...match].map((c) => map[c] || c).join('');
+    })
+    .replace(/\^\{?([0-9a-zA-Z+-]+)\}?/g, (_, match) => {
+      const map = {
+        '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+        '+': '⁺', '-': '⁻', 'a': 'ᵃ', 'b': 'ᵇ', 'c': 'ᶜ', 'd': 'ᵈ', 'e': 'ᵉ', 'f': 'ᶠ', 'x': 'ˣ', 'y': 'ʸ',
+      };
+      return [...match].map((c) => map[c] || c).join('');
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function normalizeAnswerKey(answer) {
