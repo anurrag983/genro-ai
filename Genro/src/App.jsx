@@ -1499,10 +1499,26 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
 
 function QuizResults({ descriptor, questions, answers, score, accuracy, elapsedSeconds, state, onBack }) {
   const unanswered = questions.length - Object.keys(answers).length;
-  const [showReport, setShowReport] = useState(true);
+  const [showReport, setShowReport] = useState(false);
   const savingLabel = state.saving ? 'Saving your test result…' : state.saveError ? 'Result saved locally only' : 'Your result is in your progress history';
   const avgSecondsPerQuestion = questions.length ? Math.round(elapsedSeconds / questions.length) : 0;
   const performanceTone = accuracy >= 70 ? 'high' : accuracy >= 40 ? 'medium' : 'low';
+  const topicPerformance = useMemo(() => {
+    const groups = new Map();
+    questions.forEach((question, index) => {
+      const name = question.topicName || question.topic_name || question.topic || question.section || 'Practice topic';
+      const group = groups.get(name) || { topic_name: name, correct: 0, total: 0 };
+      group.total += 1;
+      const selected = answers[index] || null;
+      const correct = question.correctAnswer || null;
+      if (selected && isCorrectAnswer(selected, correct)) group.correct += 1;
+      groups.set(name, group);
+    });
+    return [...groups.values()].map((item) => ({ ...item, accuracy: Math.round((item.correct / item.total) * 100) }));
+  }, [questions, answers]);
+  const weakTopics = topicPerformance.filter((item) => item.accuracy < 70);
+  const strongTopics = topicPerformance.filter((item) => item.accuracy >= 70);
+
   return <div className="quiz-results">
     <section className="result-hero">
       <div className="accuracy-ring" style={{ '--pct': Math.max(0, Math.min(100, accuracy)) }}><span>{accuracy}<small>%</small></span></div>
@@ -1524,6 +1540,30 @@ function QuizResults({ descriptor, questions, answers, score, accuracy, elapsedS
         <button className="primary-button" onClick={onBack}>Back to syllabus <ArrowRight size={17} /></button>
       </div>
     </section>
+
+    {/* Strong + Weak topics — always visible, outside the collapsible report */}
+    <section className="panel result-topics-panel">
+      <div className="result-topics-grid">
+        <div className="result-topic-col strong-col">
+          <span className="card-kicker"><CheckCircle size={13} /> STRONG TOPICS</span>
+          {strongTopics.length ? strongTopics.map((topic) => (
+            <div key={topic.topic_name} className="topic-pill strong">
+              <span>{topic.topic_name}</span><strong>{topic.accuracy}%</strong>
+            </div>
+          )) : <p className="muted">Keep practising to identify strengths.</p>}
+        </div>
+        <div className="result-topic-col weak-col">
+          <span className="card-kicker"><TrendingUp size={13} /> WEAK TOPICS</span>
+          {weakTopics.length ? weakTopics.map((topic) => (
+            <div key={topic.topic_name} className="topic-pill weak">
+              <span>{topic.topic_name} · {topic.accuracy}%</span>
+              <a className="video-rec-link" href={videoRecommendationFor(topic).url} target="_blank" rel="noreferrer"><PlayCircle size={13} /> {videoRecommendationFor(topic).isCurated ? 'Watch video' : 'Find a video'}</a>
+            </div>
+          )) : <p className="muted">No weak topics in this attempt — great work!</p>}
+        </div>
+      </div>
+    </section>
+
     {showReport && <TestReportView questions={questions} answers={answers} />}
   </div>;
 }
@@ -1576,10 +1616,6 @@ function TestReportView({ questions, answers }) {
       <div className="report-summary-stat correct"><strong>{counts.correct}</strong><span>Correct</span></div>
       <div className="report-summary-stat wrong"><strong>{counts.wrong}</strong><span>Incorrect</span></div>
       <div className="report-summary-stat skipped"><strong>{counts.skipped}</strong><span>Skipped</span></div>
-    </div>
-    <div className="report-topic-insights">
-      <div><b>Strong topics</b>{strongTopics.length ? strongTopics.map((topic) => <span key={topic.topic_name}>{topic.topic_name} · {topic.accuracy}%</span>) : <span>Keep practising to identify strengths.</span>}</div>
-      <div className="weak-topic-report"><b>Weak topics</b>{weakTopics.length ? weakTopics.map((topic) => <span key={topic.topic_name}><em>{topic.topic_name} · {topic.accuracy}%</em><a className="video-rec-link" href={videoRecommendationFor(topic).url} target="_blank" rel="noreferrer"><PlayCircle size={13} /> Play video</a></span>) : <span>No weak topics in this attempt.</span>}</div>
     </div>
     <div className="report-filter-row" role="tablist" aria-label="Filter questions">
       {REPORT_FILTERS.map((item) => <button key={item.key} type="button" role="tab" aria-selected={filter === item.key} className={filter === item.key ? 'active' : ''} onClick={() => setFilter(item.key)}>{item.label}{item.key !== 'all' ? ` (${counts[item.key] || 0})` : ''}</button>)}
