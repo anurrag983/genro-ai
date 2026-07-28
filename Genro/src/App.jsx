@@ -1040,61 +1040,142 @@ function CustomPracticePage({ user, onStartQuiz }) {
 
   return (
     <div className="page-stack custom-practice-page">
-      <section className="study-header">
-        <div><span className="eyebrow"><span className="eyebrow-dot" /> BUILD YOUR OWN SET</span><h2>Mix any topics into one test.</h2><p>Select any combination of topics from {selectedSubject?.name || subject} — the test is generated from every question across what you pick.</p></div>
-        <div className="study-badge"><Sparkles size={19} /><span><b>Custom Practice</b><small>Your rules, your mix</small></span></div>
+      {/* ── HEADER ── */}
+      <section className="cp-hero">
+        <div className="cp-hero-text">
+          <span className="eyebrow"><span className="eyebrow-dot" /> BUILD YOUR OWN SET</span>
+          <h2>Mix any topics<br /><em>into one test.</em></h2>
+          <p>Pick topics across any chapter — we'll build a shuffled test from every question you select.</p>
+        </div>
+        <div className="cp-hero-badge">
+          <div className="cp-badge-ring">
+            <Sparkles size={26} />
+          </div>
+          <div>
+            <b>Custom Practice</b>
+            <small>Your rules, your mix</small>
+          </div>
+        </div>
       </section>
 
-      <div className="subject-switcher" role="tablist" aria-label="Select a subject">
+      {/* ── SUBJECT TABS ── */}
+      <div className="cp-subject-tabs" role="tablist" aria-label="Select a subject">
         {availableSubjects.map((item) => {
           const Icon = item.icon;
-          return <button key={item.name} role="tab" aria-selected={subject === item.name} className={subject === item.name ? `active ${item.accent}` : ''} onClick={() => setSubject(item.name)}><Icon size={18} /><span>{item.name}</span></button>;
+          return (
+            <button key={item.name} role="tab" aria-selected={subject === item.name}
+              className={`cp-subject-tab ${subject === item.name ? `active ${item.accent}` : ''}`}
+              onClick={() => setSubject(item.name)}>
+              <span className="cp-tab-icon"><Icon size={20} /></span>
+              <span className="cp-tab-label">{item.name}</span>
+            </button>
+          );
         })}
       </div>
 
-      <div className="custom-search-row">
-        <div className="custom-search-box"><Search size={16} /><input type="text" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={`Search ${selectedSubject?.name || subject} topics…`} aria-label="Search topics" />{searchQuery && <button type="button" onClick={() => setSearchQuery('')} aria-label="Clear search"><X size={14} /></button>}</div>
-        <div className="difficulty-selector" role="radiogroup" aria-label="Difficulty">
+      {/* ── SEARCH + DIFFICULTY ── */}
+      <div className="cp-controls-row">
+        <div className="cp-search-box">
+          <Search size={16} />
+          <input type="text" value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={`Search ${selectedSubject?.name || subject} topics…`}
+            aria-label="Search topics" />
+          {searchQuery && <button type="button" onClick={() => setSearchQuery('')} aria-label="Clear"><X size={14} /></button>}
+        </div>
+        <div className="cp-difficulty-pills" role="radiogroup" aria-label="Difficulty">
           {['all', 'easy', 'medium', 'tough'].map((level) => (
-            <button key={level} type="button" role="radio" aria-checked={difficulty === level} className={difficulty === level ? 'active' : ''} onClick={() => setDifficulty(level)}>{level === 'all' ? 'All' : `${level[0].toUpperCase()}${level.slice(1)}`}</button>
+            <button key={level} type="button" role="radio" aria-checked={difficulty === level}
+              className={`cp-diff-pill ${difficulty === level ? 'active' : ''} ${level}`}
+              onClick={() => setDifficulty(level)}>
+              {level === 'all' ? 'All' : level.charAt(0).toUpperCase() + level.slice(1)}
+            </button>
           ))}
         </div>
       </div>
 
-      {state.loading ? <>{coldStartNotice && <InfoBanner message={coldStartNotice} />}<SyllabusSkeleton /></> : state.error ? <RequestState icon={XCircle} title="We couldn't load this syllabus" text={state.error} /> : chapters.length === 0 ? <RequestState icon={BookOpen} title="No chapters are available yet" text="The backend did not return any syllabus chapters for this class and subject." /> : visibleChapters.length === 0 ? <RequestState icon={Search} title="No topics match your search" text={`Try a different word, or clear the search to see every ${selectedSubject?.name || subject} topic again.`} /> : (
-        <section className="chapter-list" aria-label={`${subject} chapters for custom practice`}>
-          {visibleChapters.map((chapter) => {
-            const practicable = (chapter.topics || []).filter((topic) => topic.has_test);
-            const chapterSelectedCount = practicable.filter((topic) => selectedTopics.has(topic.topic_id)).length;
-            return <article className="chapter-card expanded" key={chapter.chapter_id}>
-              <div className="chapter-toggle custom-chapter-head">
-                <span className="chapter-number">{String(chapter.chapter_number).padStart(2, '0')}</span>
-                <span className="chapter-title"><small>CHAPTER {chapter.chapter_number} · {practicable.length} PRACTICABLE</small><b>{chapter.chapter_name}</b></span>
-                <div className="custom-chapter-actions">
-                  {chapter.has_chapter_test && <button type="button" className="practice-button ready" onClick={() => onStartQuiz({ id: chapter.chapter_id, kind: 'chapter', title: `${chapter.chapter_name} · Full test`, chapter: chapter.chapter_name })}>Full test <ArrowRight size={15} /></button>}
-                  <button type="button" className="text-button" disabled={!practicable.length} onClick={() => toggleChapterAll(chapter)}>{practicable.length && chapterSelectedCount === practicable.length ? 'Clear chapter' : 'Select all'}</button>
-                </div>
-              </div>
-              <div className="topic-list custom-topic-list">
-                {(chapter.topics || []).map((topic) => (
-                  <label key={topic.topic_id} className={`custom-topic-row ${!topic.has_test ? 'disabled' : ''}`}>
-                    <input type="checkbox" disabled={!topic.has_test} checked={selectedTopics.has(topic.topic_id)} onChange={() => toggleTopic(topic)} />
-                    <span>{topic.topic_name}</span>
-                    {!topic.has_test && <small>Coming soon</small>}
-                  </label>
-                ))}
-                {!chapter.topics?.length && <p className="empty-topic">Topics for this chapter will appear here soon.</p>}
-              </div>
-            </article>;
-          })}
-        </section>
-      )}
+      {/* ── CHAPTER LIST ── */}
+      {state.loading
+        ? <>{coldStartNotice && <InfoBanner message={coldStartNotice} />}<SyllabusSkeleton /></>
+        : state.error
+          ? <RequestState icon={XCircle} title="We couldn't load this syllabus" text={state.error} />
+          : chapters.length === 0
+            ? <RequestState icon={BookOpen} title="No chapters available yet" text="The backend did not return any syllabus chapters for this class and subject." />
+            : visibleChapters.length === 0
+              ? <RequestState icon={Search} title="No topics match your search" text={`Try a different word, or clear the search.`} />
+              : (
+                <div className="cp-chapter-list">
+                  {visibleChapters.map((chapter) => {
+                    const practicable = (chapter.topics || []).filter((t) => t.has_test);
+                    const chapterSelectedCount = practicable.filter((t) => selectedTopics.has(t.topic_id)).length;
+                    const allSelected = practicable.length > 0 && chapterSelectedCount === practicable.length;
+                    return (
+                      <div className={`cp-chapter ${chapterSelectedCount > 0 ? 'has-selection' : ''}`} key={chapter.chapter_id}>
+                        {/* Chapter Header */}
+                        <div className="cp-chapter-header">
+                          <div className="cp-chapter-num">{String(chapter.chapter_number).padStart(2, '0')}</div>
+                          <div className="cp-chapter-info">
+                            <span className="cp-chapter-meta">Chapter {chapter.chapter_number} · {practicable.length} topics</span>
+                            <h3 className="cp-chapter-name">{chapter.chapter_name}</h3>
+                          </div>
+                          <div className="cp-chapter-controls">
+                            {chapterSelectedCount > 0 && (
+                              <span className="cp-chapter-progress">{chapterSelectedCount}/{practicable.length}</span>
+                            )}
+                            {chapter.has_chapter_test && (
+                              <button type="button" className="cp-full-test-btn"
+                                onClick={() => onStartQuiz({ id: chapter.chapter_id, kind: 'chapter', title: `${chapter.chapter_name} · Full test`, chapter: chapter.chapter_name })}>
+                                Full test <ArrowRight size={13} />
+                              </button>
+                            )}
+                            <button type="button" className="cp-select-all-btn" disabled={!practicable.length}
+                              onClick={() => toggleChapterAll(chapter)}>
+                              {allSelected ? 'Deselect' : 'Select all'}
+                            </button>
+                          </div>
+                        </div>
 
-      <section className="panel custom-practice-builder">
-        <div className="panel-heading"><div><span className="card-kicker">YOUR SET</span><h3>{selectedCount} topic{selectedCount === 1 ? '' : 's'} selected</h3></div>{selectedCount > 0 && <button type="button" className="text-button" onClick={clearSelection}>Clear all</button>}</div>
-        <p className="muted custom-practice-hint">{selectedCount ? `Every ${difficulty === 'all' ? '' : `${difficulty} `}question from these ${selectedCount} topic${selectedCount === 1 ? '' : 's'} will be combined into one shuffled test.` : 'Tick topics above to build your mix.'}</p>
-        <button className="primary-button custom-start-button" disabled={!selectedCount} onClick={startPractice}>Start custom practice <ArrowRight size={17} /></button>
-      </section>
+                        {/* Topic Cards Grid */}
+                        <div className="cp-topic-grid">
+                          {(chapter.topics || []).map((topic) => {
+                            const isSelected = selectedTopics.has(topic.topic_id);
+                            return (
+                              <button key={topic.topic_id} type="button"
+                                disabled={!topic.has_test}
+                                className={`cp-topic-card ${isSelected ? 'selected' : ''} ${!topic.has_test ? 'unavailable' : ''}`}
+                                onClick={() => topic.has_test && toggleTopic(topic)}>
+                                <div className="cp-topic-check">
+                                  {isSelected && <Check size={12} />}
+                                </div>
+                                <span className="cp-topic-name">{topic.topic_name}</span>
+                                {!topic.has_test && <span className="cp-topic-soon">Soon</span>}
+                              </button>
+                            );
+                          })}
+                          {!chapter.topics?.length && <p className="cp-no-topics">Topics coming soon.</p>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+      }
+
+
+
+      {/* ── STICKY SELECTION BAR — always visible when topics selected ── */}
+      {selectedCount > 0 && (
+        <div className="custom-sticky-bar">
+          <div className="custom-sticky-info">
+            <span className="custom-sticky-count">{selectedCount} topic{selectedCount === 1 ? '' : 's'} selected</span>
+            <span className="custom-sticky-hint">{difficulty === 'all' ? 'All difficulties' : `${difficulty[0].toUpperCase()}${difficulty.slice(1)} only`}</span>
+          </div>
+          <div className="custom-sticky-actions">
+            <button type="button" className="secondary-button compact" onClick={clearSelection}>Clear</button>
+            <button className="primary-button" onClick={startPractice}>Start practice <ArrowRight size={16} /></button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1350,7 +1431,7 @@ function ProfilePage({ user, onUpdate, onLogout }) {
         <div className="form-grid two"><FormField icon={Phone} label="Mobile number" htmlFor="profile-mobile"><input className="readonly-input" id="profile-mobile" name="mobile_no" inputMode="numeric" value={form.mobile_no || ''} readOnly aria-readonly="true" /></FormField><FormField icon={BookMarked} label="Class" htmlFor="profile-class"><select id="profile-class" name="class_level" value={form.class_level || 'CLASS 12'} onChange={updateField}><option>CLASS 11</option><option>CLASS 12</option></select></FormField></div>
         <FormField icon={Award} label="Board" htmlFor="profile-board"><select id="profile-board" name="board" value={form.board || 'CBSE'} onChange={updateField}><option>CBSE</option><option>ISC</option><option>State Board</option></select></FormField>
         <TrackPicker value={form.study_track} onChange={(study_track) => setForm((current) => ({ ...current, study_track }))} compact />
-        <p className="identity-lock-note">Email and mobile are your verified sign-in details, so they can’t be changed here.</p>
+        <p className="identity-lock-note">Email and mobile are your verified sign-in details, so they can't be changed here.</p>
         <button className="primary-button profile-save" disabled={state.saving} type="submit">{state.saving ? <LoaderLabel text="Saving changes" /> : <><Check size={17} /> Save changes</>}</button>
       </form>
       <aside className="profile-side-stack">
@@ -1361,6 +1442,7 @@ function ProfilePage({ user, onUpdate, onLogout }) {
     </section>
   </div>;
 }
+
 
 function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
   const [questions, setQuestions] = useState([]);
@@ -1500,7 +1582,7 @@ function QuizPage({ user, descriptor, onBack, onSavedProgress }) {
 function QuizResults({ descriptor, questions, answers, score, accuracy, elapsedSeconds, state, onBack }) {
   const unanswered = questions.length - Object.keys(answers).length;
   const [showReport, setShowReport] = useState(false);
-  const savingLabel = state.saving ? 'Saving your test result…' : state.saveError ? 'Result saved locally only' : 'Your result is in your progress history';
+  const savingLabel = state.saving ? 'Saving…' : state.saveError ? 'Saved locally only' : 'Result saved to your profile';
   const avgSecondsPerQuestion = questions.length ? Math.round(elapsedSeconds / questions.length) : 0;
   const performanceTone = accuracy >= 70 ? 'high' : accuracy >= 40 ? 'medium' : 'low';
   const topicPerformance = useMemo(() => {
@@ -1520,51 +1602,96 @@ function QuizResults({ descriptor, questions, answers, score, accuracy, elapsedS
   const strongTopics = topicPerformance.filter((item) => item.accuracy >= 70);
 
   return <div className="quiz-results">
-    <section className="result-hero">
-      <div className="accuracy-ring" style={{ '--pct': Math.max(0, Math.min(100, accuracy)) }}><span>{accuracy}<small>%</small></span></div>
-      <div className="result-hero-copy">
-        <span className="eyebrow">PRACTICE COMPLETE</span>
-        <h2>{accuracy >= 70 ? 'That was a strong effort.' : accuracy >= 40 ? 'Good progress — a bit more practice will help.' : 'Every result gives you a better next step.'}</h2>
-        <p>{descriptor.title} · {questions.length} questions · {formatElapsedTime(elapsedSeconds)}</p>
-      </div>
-    </section>
-    <section className="result-grid">
-      <article><span className="card-kicker">SCORE</span><strong>{score}<small> / {questions.length}</small></strong></article>
-      <article><span className="card-kicker">ACCURACY</span><strong className={`tone-${performanceTone}`}>{accuracy}<small>%</small></strong></article>
-      <article><span className="card-kicker">UNANSWERED</span><strong>{unanswered}</strong></article>
-      <article><span className="card-kicker">TIME PER QUESTION</span><strong>{formatPaceLabel(avgSecondsPerQuestion)}</strong></article>
-    </section>
-    <section className="panel result-summary"><div className="panel-heading"><div><span className="card-kicker">SAVED PROGRESS</span><h3>{savingLabel}</h3></div><span className="panel-icon teal"><CheckCircle size={19} /></span></div>{!state.saving && !state.saveError && <p className="success-copy"><Check size={15} /> Accuracy and XP were sent to the Genro backend.</p>}{state.saveError && <AlertBanner message={`We could not save this result: ${state.saveError}`} compact />}
-      <div className="result-summary-actions">
-        <button className="secondary-button" type="button" onClick={() => setShowReport((value) => !value)}>{showReport ? 'Hide' : 'View'} detailed report <ChevronDown size={16} className={showReport ? 'chevron-flip' : ''} /></button>
-        <button className="primary-button" onClick={onBack}>Back to syllabus <ArrowRight size={17} /></button>
-      </div>
-    </section>
+    {/* ── TOP COMPACT LAYOUT (fits one screen) ── */}
+    <div className="result-compact-layout">
 
-    {/* Strong + Weak topics — always visible, outside the collapsible report */}
-    <section className="panel result-topics-panel">
-      <div className="result-topics-grid">
-        <div className="result-topic-col strong-col">
-          <span className="card-kicker"><CheckCircle size={13} /> STRONG TOPICS</span>
-          {strongTopics.length ? strongTopics.map((topic) => (
-            <div key={topic.topic_name} className="topic-pill strong">
-              <span>{topic.topic_name}</span><strong>{topic.accuracy}%</strong>
-            </div>
-          )) : <p className="muted">Keep practising to identify strengths.</p>}
+      {/* LEFT: Ring + metrics */}
+      <div className="result-left-col">
+        <div className="result-ring-block">
+          <div className="accuracy-ring" style={{ '--pct': Math.max(0, Math.min(100, accuracy)) }}>
+            <span>{accuracy}<small>%</small></span>
+          </div>
+          <div className="result-ring-label">
+            <span className="eyebrow">PRACTICE COMPLETE</span>
+            <p className="result-subtitle">{descriptor.title}</p>
+            <p className="result-meta">{questions.length} questions · {formatElapsedTime(elapsedSeconds)}</p>
+          </div>
         </div>
-        <div className="result-topic-col weak-col">
-          <span className="card-kicker"><TrendingUp size={13} /> WEAK TOPICS</span>
-          {weakTopics.length ? weakTopics.map((topic) => (
-            <div key={topic.topic_name} className="topic-pill weak">
-              <span>{topic.topic_name} · {topic.accuracy}%</span>
-              <a className="video-rec-link" href={videoRecommendationFor(topic).url} target="_blank" rel="noreferrer"><PlayCircle size={13} /> {videoRecommendationFor(topic).isCurated ? 'Watch video' : 'Find a video'}</a>
-            </div>
-          )) : <p className="muted">No weak topics in this attempt — great work!</p>}
+
+        <div className="result-metric-row">
+          <div className="result-metric-chip">
+            <span>Score</span>
+            <strong>{score}<small>/{questions.length}</small></strong>
+          </div>
+          <div className="result-metric-chip">
+            <span>Accuracy</span>
+            <strong className={`tone-${performanceTone}`}>{accuracy}<small>%</small></strong>
+          </div>
+          <div className="result-metric-chip">
+            <span>Unanswered</span>
+            <strong>{unanswered}</strong>
+          </div>
+          <div className="result-metric-chip">
+            <span>Pace</span>
+            <strong>{formatPaceLabel(avgSecondsPerQuestion)}</strong>
+          </div>
         </div>
       </div>
-    </section>
 
-    {showReport && <TestReportView questions={questions} answers={answers} />}
+      {/* RIGHT: Save status + topics + actions */}
+      <div className="result-right-col">
+        {/* Save status */}
+        <div className={`result-save-badge ${state.saving ? 'saving' : state.saveError ? 'error' : 'ok'}`}>
+          {state.saving
+            ? <><span className="badge-dot saving" />Saving result…</>
+            : state.saveError
+              ? <><span className="badge-dot error" />Could not save</>
+              : <><Check size={13} />{savingLabel}</>
+          }
+        </div>
+
+        {/* Strong topics */}
+        <div className="result-topic-block">
+          <span className="card-kicker strong-kicker"><CheckCircle size={11} /> STRONG TOPICS</span>
+          <div className="result-topic-list">
+            {strongTopics.length ? strongTopics.map((topic) => (
+              <div key={topic.topic_name} className="topic-chip strong">
+                <span>{topic.topic_name}</span>
+                <b>{topic.accuracy}%</b>
+              </div>
+            )) : <span className="topic-empty">Keep practising to build strengths.</span>}
+          </div>
+        </div>
+
+        {/* Weak topics */}
+        <div className="result-topic-block">
+          <span className="card-kicker weak-kicker"><TrendingUp size={11} /> WEAK TOPICS</span>
+          <div className="result-topic-list">
+            {weakTopics.length ? weakTopics.map((topic) => (
+              <div key={topic.topic_name} className="topic-chip weak">
+                <span>{topic.topic_name} · {topic.accuracy}%</span>
+                <a className="video-chip-link" href={videoRecommendationFor(topic).url} target="_blank" rel="noreferrer">
+                  <PlayCircle size={11} /> {videoRecommendationFor(topic).isCurated ? 'Watch' : 'Video'}
+                </a>
+              </div>
+            )) : <span className="topic-empty">No weak topics — great work!</span>}
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="result-actions">
+          <button className="primary-button" onClick={onBack}>Back to syllabus <ArrowRight size={16} /></button>
+          <button className="secondary-button compact" type="button" onClick={() => setShowReport((v) => !v)}>
+            <BookOpen size={14} /> {showReport ? 'Hide' : 'View'} report <ChevronDown size={14} className={showReport ? 'chevron-flip' : ''} />
+          </button>
+        </div>
+      </div>
+    </div>
+
+    {/* ── DETAILED REPORT — own scroll, only when open ── */}
+    {showReport && <div className="result-report-drawer">
+      <TestReportView questions={questions} answers={answers} />
+    </div>}
   </div>;
 }
 
