@@ -44,7 +44,7 @@ a { color: inherit; text-decoration: none; }
 /* ── UTILITIES ── */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 /* ── BRAND ── */
-.brand { display: flex; align-items: center; gap: 10px; }
+.brand { display: flex; align-items: center; }
 .brand span { color: #c8c6e8; font-size: 17px; font-weight: 800; letter-spacing: .02em; }
 .brand b { color: #a08aff; font-size: 17px; font-weight: 900; letter-spacing: .04em; text-shadow: 0 0 20px rgba(160,138,255,.5); }
 .brand-mark {
@@ -54,6 +54,7 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid rgba(180,168,255,.25);
   box-shadow: 0 6px 20px rgba(120,100,255,.4), 0 2px 0 rgba(255,255,255,.16) inset;
   transition: transform .2s ease, box-shadow .2s ease;
+  margin-right: 10px;
 }
 .brand-mark:hover { transform: rotate(-5deg) scale(1.08); box-shadow: 0 10px 28px rgba(120,100,255,.55); }
 .eyebrow { display: inline-flex; align-items: center; gap: 8px; color: #9c9bb9; font-size: 11px; font-weight: 800; letter-spacing: .13em; line-height: 1.2; }
