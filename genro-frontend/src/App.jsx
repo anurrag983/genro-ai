@@ -22,6 +22,7 @@ import {
   Flame,
   FlaskConical,
   Home,
+  Layers,
   LogOut,
   Mail,
   MessageCircle,
@@ -31,17 +32,21 @@ import {
   PlayCircle,
   RefreshCw,
   Rocket,
+  RotateCcw,
   Send,
   Search,
+  Shuffle,
   Sigma,
   Sparkles,
   Target,
   TrendingUp,
   Trophy,
   User,
+  Video,
   X,
   XCircle,
   Zap,
+  Calendar,
 } from 'lucide-react';
 import { API_BASE_URL, api, fetchQuizPayload } from './api';
 import './index.css';
@@ -83,8 +88,9 @@ const NAVIGATION = [
   { id: 'home', label: 'Overview', icon: Home },
   { id: 'study', label: 'Study', icon: BookOpen },
   { id: 'custom', label: 'Custom Practice', icon: Sparkles },
+  { id: 'flashcards', label: 'Flashcards', icon: Layers },
   { id: 'progress', label: 'Progress', icon: TrendingUp },
-  { id: 'tutor', label: 'AI Tutor', icon: MessageCircle },
+  { id: 'tutor', label: 'Oliver', icon: MessageCircle },
   { id: 'profile', label: 'Profile', icon: User },
 ];
 
@@ -440,7 +446,7 @@ function AuthScreen({ onAuthenticated }) {
       <section className="auth-showcase">
         <div className="brand auth-brand">
           <span className="brand-mark"><Sparkles size={18} /></span>
-          <span>genro</span><b>AI</b>
+          <span>GEN</span><b>RO</b>
         </div>
 
         <div className="auth-copy">
@@ -474,7 +480,7 @@ function AuthScreen({ onAuthenticated }) {
         <div className="auth-form-wrap">
           <div className="mobile-brand brand">
             <span className="brand-mark"><Sparkles size={18} /></span>
-            <span>genro</span><b>AI</b>
+            <span>GEN</span><b>RO</b>
           </div>
           <div className="auth-heading">
             <span className="eyebrow">{isLogin ? 'WELCOME BACK' : signupStep === 'verify' ? 'ONE LAST STEP' : 'START YOUR JOURNEY'}</span>
@@ -633,7 +639,7 @@ function LearningWorkspace({ initialUser, activePage, onPageChange, onUpdateSess
 
   // Only show the quiz title while actually on the quiz page — navigating via
   // sidebar should immediately show the correct page name.
-  const pageTitle = (activePage === 'quiz' && quizDescriptor) ? quizDescriptor.title : NAVIGATION.find((item) => item.id === activePage)?.label;
+  const pageTitle = (activePage === 'quiz' && quizDescriptor) ? quizDescriptor.title : activePage === 'tutor' ? 'Oliver • AI Tutor' : NAVIGATION.find((item) => item.id === activePage)?.label;
   const currentProgress = progress || emptyProgress();
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -644,7 +650,7 @@ function LearningWorkspace({ initialUser, activePage, onPageChange, onUpdateSess
         <div className="sidebar-top">
           <div className="brand sidebar-brand">
             <span className="brand-mark"><Sparkles size={18} /></span>
-            <span>genro</span><b>AI</b>
+            <span>GEN</span><b>RO</b>
           </div>
           <button className="sidebar-collapse-btn" onClick={() => setSidebarCollapsed(v => !v)}
             aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -683,6 +689,7 @@ function LearningWorkspace({ initialUser, activePage, onPageChange, onUpdateSess
           {activePage === 'home' && <OverviewPage user={user} dashboard={dashboard} progress={currentProgress} isLoading={isLoading} onNavigate={onPageChange} />}
           {activePage === 'study' && <StudyPage user={user} progress={currentProgress} onStartQuiz={openQuiz} />}
           {activePage === 'custom' && <CustomPracticePage user={user} onStartQuiz={(descriptor) => openQuiz(descriptor, 'custom')} />}
+          {activePage === 'flashcards' && <FlashcardsPage user={user} />}
           {activePage === 'progress' && <ProgressPage user={user} progress={currentProgress} isLoading={isLoading} onNavigate={onPageChange} />}
           {activePage === 'tutor' && <TutorPage user={user} />}
           {activePage === 'profile' && <ProfilePage user={user} onUpdate={updateUser} onLogout={onLogout} />}
@@ -720,7 +727,7 @@ function OverviewPage({ user, dashboard, progress, isLoading, onNavigate }) {
           <p>Choose a topic, follow your NCERT sequence, and let every attempt make your next study session clearer.</p>
           <div className="hero-actions">
             <button className="primary-button" onClick={() => onNavigate('study')}>Explore syllabus <ArrowRight size={17} /></button>
-            <button className="secondary-button" onClick={() => onNavigate('tutor')}><MessageCircle size={16} /> Ask Genro AI</button>
+            <button className="secondary-button" onClick={() => onNavigate('tutor')}><MessageCircle size={16} /> Ask Oliver</button>
           </div>
         </div>
         <div className="hero-orbit" aria-hidden="true">
@@ -786,7 +793,7 @@ function OverviewPage({ user, dashboard, progress, isLoading, onNavigate }) {
         </article>
         <article className="panel tutor-prompt-panel">
           <div className="tutor-mini-icon"><Bot size={24} /></div>
-          <span className="card-kicker">GENRO AI TUTOR</span>
+          <span className="card-kicker">OLIVER • AI TUTOR</span>
           <h3>Stuck on a concept?</h3>
           <p>Ask for a simple explanation, a revision plan, or help breaking down a difficult question.</p>
           <button className="primary-button" onClick={() => onNavigate('tutor')}>Start a conversation <ArrowRight size={17} /></button>
@@ -1195,6 +1202,233 @@ function CustomPracticePage({ user, onStartQuiz }) {
   );
 }
 
+// ==========================================
+// FLASHCARDS
+// ==========================================
+// Any JSON file dropped into src/data/flashcards/ that follows the shape
+// { Subject: { Chapter: { Topic: { Easy: [...], Medium: [...], Tough: [...] } } } }
+// is picked up automatically — no code change needed to add another deck.
+const flashcardModules = import.meta.glob('./data/flashcards/*.json', { eager: true });
+const FLASHCARD_DIFFICULTIES = ['Easy', 'Medium', 'Tough'];
+
+function buildFlashcardLibrary() {
+  const library = {};
+  Object.values(flashcardModules).forEach((mod) => {
+    const data = (mod && (mod.default || mod)) || {};
+    Object.entries(data).forEach(([subjectName, chapters]) => {
+      const subjectKey = canonicalSubject(subjectName) || subjectName;
+      library[subjectKey] = library[subjectKey] || {};
+      Object.entries(chapters || {}).forEach(([chapterName, topics]) => {
+        library[subjectKey][chapterName] = library[subjectKey][chapterName] || {};
+        Object.entries(topics || {}).forEach(([topicName, difficulties]) => {
+          const existing = library[subjectKey][chapterName][topicName] || { Easy: [], Medium: [], Tough: [] };
+          FLASHCARD_DIFFICULTIES.forEach((level) => {
+            const cards = Array.isArray(difficulties?.[level]) ? difficulties[level] : [];
+            existing[level] = existing[level].concat(cards);
+          });
+          library[subjectKey][chapterName][topicName] = existing;
+        });
+      });
+    });
+  });
+  return library;
+}
+
+const FLASHCARD_LIBRARY = buildFlashcardLibrary();
+
+function topicCardCount(topicDifficulties) {
+  return FLASHCARD_DIFFICULTIES.reduce((total, level) => total + (topicDifficulties[level]?.length || 0), 0);
+}
+
+function flashcardsStorageKey(userId) {
+  return `genro-flashcards-known-${userId || 'guest'}`;
+}
+
+function loadKnownCardKeys(userId) {
+  try {
+    const raw = localStorage.getItem(flashcardsStorageKey(userId));
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveKnownCardKeys(userId, keySet) {
+  try {
+    localStorage.setItem(flashcardsStorageKey(userId), JSON.stringify(Array.from(keySet)));
+  } catch {
+    // Storage can fail in private-browsing modes — studying still works, it just won't persist.
+  }
+}
+
+function FlashcardsPage({ user }) {
+  const subjects = Object.keys(FLASHCARD_LIBRARY);
+  const [subject, setSubject] = useState(null);
+  const [chapter, setChapter] = useState(null);
+  const [topic, setTopic] = useState(null);
+  const [difficulty, setDifficulty] = useState('All');
+  const [reviewOnly, setReviewOnly] = useState(false);
+  const [shuffle, setShuffle] = useState(false);
+  const [index, setIndex] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [knownKeys, setKnownKeys] = useState(() => loadKnownCardKeys(user?.user_id));
+
+  useEffect(() => { setKnownKeys(loadKnownCardKeys(user?.user_id)); }, [user?.user_id]);
+
+  if (!subjects.length) {
+    return <div className="page-stack flashcards-page">
+      <section className="panel empty-progress">
+        <EmptyInline icon={Layers} title="No flashcard decks yet" text="Drop a deck JSON file into src/data/flashcards/ and it will show up here automatically." actionLabel={null} />
+      </section>
+    </div>;
+  }
+
+  // ── Level 1: pick a subject ──
+  if (!subject) {
+    return <div className="page-stack flashcards-page">
+      <section className="progress-hero">
+        <div><span className="eyebrow"><span className="eyebrow-dot" /> QUICK RECALL</span><h2>Flashcards</h2><p>Flip through concept, formula, and definition cards to drill fast recall before a test.</p></div>
+      </section>
+      <section className="content-grid two-column flashcard-subject-grid">
+        {subjects.map((name) => {
+          const subjectMeta = SUBJECTS.find((s) => s.name === name);
+          const Icon = subjectMeta?.icon || Layers;
+          const chapterCount = Object.keys(FLASHCARD_LIBRARY[name]).length;
+          const cardCount = Object.values(FLASHCARD_LIBRARY[name]).reduce((total, topics) => total + Object.values(topics).reduce((t, d) => t + topicCardCount(d), 0), 0);
+          return <button key={name} type="button" className={`panel flashcard-pick-card accent-${subjectMeta?.accent || 'violet'}`} onClick={() => { setSubject(name); setChapter(null); setTopic(null); }}>
+            <span className="panel-icon violet"><Icon size={20} /></span>
+            <div><h3>{name}</h3><p>{chapterCount} chapter{chapterCount === 1 ? '' : 's'} · {cardCount} card{cardCount === 1 ? '' : 's'}</p></div>
+            <ArrowRight size={18} />
+          </button>;
+        })}
+      </section>
+    </div>;
+  }
+
+  // ── Level 2: pick a chapter ──
+  if (!chapter) {
+    const chapters = Object.keys(FLASHCARD_LIBRARY[subject]);
+    return <div className="page-stack flashcards-page">
+      <BackHeader label={subject} onBack={() => setSubject(null)} title="Choose a chapter" />
+      <section className="content-grid two-column">
+        {chapters.map((chapterName) => {
+          const topics = FLASHCARD_LIBRARY[subject][chapterName];
+          const cardCount = Object.values(topics).reduce((t, d) => t + topicCardCount(d), 0);
+          return <button key={chapterName} type="button" className="panel flashcard-pick-card" onClick={() => { setChapter(chapterName); setTopic(null); }}>
+            <span className="panel-icon teal"><BookOpen size={20} /></span>
+            <div><h3>{chapterName}</h3><p>{Object.keys(topics).length} topics · {cardCount} cards</p></div>
+            <ArrowRight size={18} />
+          </button>;
+        })}
+      </section>
+    </div>;
+  }
+
+  // ── Level 3: pick a topic ──
+  if (!topic) {
+    const topics = FLASHCARD_LIBRARY[subject][chapter];
+    return <div className="page-stack flashcards-page">
+      <BackHeader label={chapter} onBack={() => setChapter(null)} title="Choose a topic" />
+      <section className="content-grid two-column">
+        {Object.entries(topics).map(([topicName, difficulties]) => {
+          const count = topicCardCount(difficulties);
+          if (!count) return null;
+          return <button key={topicName} type="button" className="panel flashcard-pick-card" onClick={() => { setTopic(topicName); setDifficulty('All'); setIndex(0); setFlipped(false); }}>
+            <span className="panel-icon rose"><Layers size={20} /></span>
+            <div><h3>{topicName}</h3><p>{count} card{count === 1 ? '' : 's'} · Easy {difficulties.Easy.length} · Medium {difficulties.Medium.length} · Tough {difficulties.Tough.length}</p></div>
+            <ArrowRight size={18} />
+          </button>;
+        })}
+      </section>
+    </div>;
+  }
+
+  // ── Level 4: study the deck ──
+  const difficulties = FLASHCARD_LIBRARY[subject][chapter][topic];
+  const pool = difficulty === 'All' ? FLASHCARD_DIFFICULTIES.flatMap((level) => difficulties[level].map((card) => ({ ...card, difficulty: level }))) : difficulties[difficulty].map((card) => ({ ...card, difficulty }));
+  const withKeys = pool.map((card, i) => ({ ...card, key: `${subject}::${chapter}::${topic}::${card.difficulty}::${i}::${card.front}` }));
+  const filtered = reviewOnly ? withKeys.filter((card) => !knownKeys.has(card.key)) : withKeys;
+  const deck = shuffle ? shuffleArray(filtered) : filtered;
+  const safeIndex = deck.length ? Math.min(index, deck.length - 1) : 0;
+  const current = deck[safeIndex];
+  const knownCount = withKeys.filter((card) => knownKeys.has(card.key)).length;
+
+  const goTo = (nextIndex) => { setIndex(Math.max(0, Math.min(nextIndex, deck.length - 1))); setFlipped(false); };
+  const markCard = (isKnown) => {
+    if (!current) return;
+    const next = new Set(knownKeys);
+    if (isKnown) next.add(current.key); else next.delete(current.key);
+    setKnownKeys(next);
+    saveKnownCardKeys(user?.user_id, next);
+    if (safeIndex < deck.length - 1) goTo(safeIndex + 1); else setFlipped(false);
+  };
+
+  return <div className="page-stack flashcards-page">
+    <BackHeader label={topic} onBack={() => setTopic(null)} title={topic} />
+
+    <section className="panel flashcard-controls">
+      <div className="sticky-diff-row" role="radiogroup" aria-label="Difficulty">
+        {['All', ...FLASHCARD_DIFFICULTIES].map((level) => (
+          <button key={level} type="button" className={`sticky-diff-pill ${level === 'Tough' ? 'rose' : level === 'Medium' ? 'amber' : level === 'Easy' ? 'green' : 'purple'} ${difficulty === level ? 'active' : ''}`}
+            onClick={() => { setDifficulty(level); setIndex(0); setFlipped(false); }}>
+            {level}
+          </button>
+        ))}
+      </div>
+      <div className="flashcard-toggle-row">
+        <button type="button" className={`text-button flashcard-toggle ${shuffle ? 'active' : ''}`} onClick={() => { setShuffle((v) => !v); setIndex(0); setFlipped(false); }}><Shuffle size={14} /> Shuffle</button>
+        <button type="button" className={`text-button flashcard-toggle ${reviewOnly ? 'active' : ''}`} onClick={() => { setReviewOnly((v) => !v); setIndex(0); setFlipped(false); }}><RotateCcw size={14} /> Still learning only</button>
+        <span className="result-count">{knownCount}/{withKeys.length} known</span>
+      </div>
+    </section>
+
+    {!deck.length ? <section className="panel empty-progress"><EmptyInline icon={CheckCircle} title="Nothing left to review" text="Every card in this filter is already marked as known. Turn off 'Still learning only' to see the full deck again." actionLabel={null} /></section> : <>
+      <FlashcardStudyCard card={current} flipped={flipped} onFlip={() => setFlipped((v) => !v)} isKnown={current && knownKeys.has(current.key)} />
+      <section className="flashcard-nav-row">
+        <button type="button" className="secondary-button compact" onClick={() => goTo(safeIndex - 1)} disabled={safeIndex === 0}><ArrowLeft size={16} /> Prev</button>
+        <span className="flashcard-progress-label">{safeIndex + 1} / {deck.length}</span>
+        <button type="button" className="secondary-button compact" onClick={() => goTo(safeIndex + 1)} disabled={safeIndex === deck.length - 1}>Next <ArrowRight size={16} /></button>
+      </section>
+      <section className="flashcard-mark-row">
+        <button type="button" className="secondary-button compact tone-rose" onClick={() => markCard(false)}><XCircle size={16} /> Still learning</button>
+        <button type="button" className="primary-button" onClick={() => markCard(true)}><CheckCircle size={16} /> Got it</button>
+      </section>
+    </>}
+  </div>;
+}
+
+function BackHeader({ label, onBack, title }) {
+  return <div className="flashcard-back-header">
+    <button type="button" className="text-button" onClick={onBack}><ArrowLeft size={15} /> Back</button>
+    <div><span className="card-kicker">{label}</span><h2>{title}</h2></div>
+  </div>;
+}
+
+function FlashcardStudyCard({ card, flipped, onFlip, isKnown }) {
+  if (!card) return null;
+  return (
+    <div className="flashcard-stage">
+      <div className={`flashcard-3d ${flipped ? 'is-flipped' : ''}`} onClick={onFlip} role="button" tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFlip(); } }}>
+        <div className="flashcard-face flashcard-front">
+          <div className="flashcard-face-top">
+            <span className={`status-pill ${card.difficulty === 'Tough' ? 'tone-red' : card.difficulty === 'Medium' ? 'tone-yellow' : 'tone-green'}`}>{card.difficulty}</span>
+            {card.card_type && <span className="flashcard-type-tag">{card.card_type}</span>}
+            {isKnown && <span className="flashcard-known-tag"><CheckCircle size={12} /> Known</span>}
+          </div>
+          <p className="flashcard-text">{card.front}</p>
+          <span className="flashcard-hint">Tap to reveal answer</span>
+        </div>
+        <div className="flashcard-face flashcard-back">
+          <p className="flashcard-text">{card.back}</p>
+          {card.formula && <code className="flashcard-formula">{card.formula}</code>}
+          <span className="flashcard-hint">Tap to flip back</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProgressPage({ user, progress, isLoading, onNavigate }) {
   const [reportAttemptId, setReportAttemptId] = useState(null);
   const summary = progress.summary || {};
@@ -1218,18 +1452,288 @@ function ProgressPage({ user, progress, isLoading, onNavigate }) {
       <MetricCard icon={TrendingUp} label="Revision queue" value={weakTopics.length} detail="Marked revision required" tone="rose" loading={isLoading} />
     </section>
 
-    {!totalTests ? <section className="panel empty-progress"><EmptyInline icon={BarChart3} title={hasResponseData ? 'Your progress story starts with one test' : 'Progress data is not available yet'} text={hasResponseData ? "Head to your syllabus, look for a topic marked Practice, and complete it. We'll take care of the tracking." : 'Refresh this page after the Genro server finishes loading your saved test attempts.'} actionLabel="Open syllabus" onAction={() => onNavigate('study')} /></section> : <>
+    {!totalTests && !testHistory.length ? <section className="panel empty-progress"><EmptyInline icon={BarChart3} title={hasResponseData ? 'Your progress story starts with one test' : 'Progress data is not available yet'} text={hasResponseData ? "Head to your syllabus, look for a topic marked Practice, and complete it. We'll take care of the tracking." : 'Refresh this page after the Genro server finishes loading your saved test attempts.'} actionLabel="Open syllabus" onAction={() => onNavigate('study')} /></section> : <>
+      <PerformanceChart history={testHistory} onOpenReport={setReportAttemptId} />
       <section className="content-grid two-column">
         <TopicInsightPanel title="Revision queue" subtitle="Focus here next" icon={Target} tone="rose" topics={weakTopics} emptyText="Nothing urgent right now—nice work." showVideoHelp />
         <TopicInsightPanel title="Growing strengths" subtitle="Keep this momentum" icon={Trophy} tone="green" topics={strongTopics} emptyText="Your strongest topics will show here after a few tests." />
       </section>
       <section className="panel history-panel">
         <div className="panel-heading"><div><span className="card-kicker">TEST HISTORY</span><h3>Every recorded attempt, newest first</h3></div><span className="result-count">{testHistory.length} attempt{testHistory.length === 1 ? '' : 's'}</span></div>
-        {testHistory.length ? <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Topic</th><th>Subject</th><th>Difficulty</th><th>Accuracy</th><th>Status</th><th>XP</th><th>Attempted</th><th /></tr></thead><tbody>{testHistory.map((item, index) => <tr key={item.attempt_id || item.progress_id || `${item.topic_id}-${item.last_tested_at}-${index}`}><td><b>{item.topic_name}</b><span>{item.chapter_name}</span></td><td>{item.subject_name}</td><td>{item.difficulty || '—'}</td><td><AccuracyBadge value={item.accuracy_percentage} /></td><td><span className={`status-pill ${statusTone(item.status)}`}>{item.status || 'Recorded'}</span></td><td>+{displayNumber(item.xp_earned)} XP</td><td>{formatDate(item.attempted_at || item.last_tested_at)}</td><td>{item.attempt_id && <button className="text-button" onClick={() => setReportAttemptId(item.attempt_id)}>View report</button>}</td></tr>)}</tbody></table></div> : <p className="muted empty-copy">Your earlier topic summaries are safe. Individual test attempts will appear here as you complete new practice sets.</p>}
+        {testHistory.length ? <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Topic</th><th>Subject</th><th>Difficulty</th><th>Accuracy</th><th>Status</th><th>XP</th><th>Attempted</th><th /></tr></thead><tbody>{testHistory.map((item, index) => <tr key={item.attempt_id || item.progress_id || `${item.topic_id}-${item.last_tested_at}-${index}`} className={item.attempt_id ? 'interactive-row' : ''} onClick={() => { if (item.attempt_id) setReportAttemptId(item.attempt_id); }}>
+          <td>
+            <div className="topic-cell">
+              <b title={item.topic_name}>{item.topic_name}</b>
+              <span title={item.chapter_name}>{item.chapter_name}</span>
+            </div>
+          </td>
+          <td><div className="subject-cell"><span className={`subject-dot ${item.subject_name?.toLowerCase()}`} />{item.subject_name}</div></td>
+          <td><span className={`diff-pill ${item.difficulty?.toLowerCase()}`}>{item.difficulty || '—'}</span></td>
+          <td><AccuracyBadge value={item.accuracy_percentage} /></td>
+          <td><span className={`status-pill ${statusTone(item.status)}`}>{item.status || 'Recorded'}</span></td>
+          <td><span className="xp-cell"><Zap size={13} /> +{displayNumber(item.xp_earned)} XP</span></td>
+          <td><span className="date-cell">{formatDate(item.attempted_at || item.last_tested_at)}</span></td>
+          <td>{item.attempt_id && <button className="view-report-btn" onClick={(e) => { e.stopPropagation(); setReportAttemptId(item.attempt_id); }}>View report <ArrowRight size={14} /></button>}</td>
+        </tr>)}</tbody></table></div> : <p className="muted empty-copy">Your earlier topic summaries are safe. Individual test attempts will appear here as you complete new practice sets.</p>}
       </section>
     </>}
     {reportAttemptId && <AttemptReportModal userId={user.user_id} attemptId={reportAttemptId} onClose={() => setReportAttemptId(null)} />}
   </div>;
+}
+
+function CustomCalendarPicker({ onSelectDate, daysMap, activeDateLabel }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const pickerRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target)) setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+  const firstDay = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
+  
+  const days = [];
+  for (let i = 0; i < firstDay; i++) days.push(null);
+  for (let i = 1; i <= daysInMonth; i++) days.push(i);
+
+  const prevMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1));
+  const nextMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1));
+
+  return (
+    <div style={{ position: 'relative' }} ref={pickerRef}>
+      <button className={`date-pill ${activeDateLabel ? 'active' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: '4px' }} onClick={() => setIsOpen(!isOpen)}>
+        <Calendar size={12} /> {activeDateLabel ? activeDateLabel.toUpperCase() : 'CUSTOM'}
+      </button>
+      
+      {isOpen && (
+        <div className="custom-calendar-popup">
+          <div className="calendar-header">
+            <button onClick={prevMonth} className="cal-nav"><ChevronLeft size={16}/></button>
+            <span className="cal-month">{currentMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}</span>
+            <button onClick={nextMonth} className="cal-nav"><ChevronRight size={16}/></button>
+          </div>
+          <div className="calendar-grid">
+            {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => <div key={d} className="cal-day-name">{d}</div>)}
+            {days.map((day, i) => {
+              if (!day) return <div key={`empty-${i}`} className="cal-day" />;
+              const d = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+              const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+              const hasData = !!daysMap[dateStr];
+              
+              return (
+                <div 
+                  key={i} 
+                  className={`cal-day clickable ${hasData ? 'has-data' : ''}`} 
+                  onClick={() => {
+                    onSelectDate(dateStr);
+                    setIsOpen(false);
+                  }}
+                >
+                  {day}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PerformanceChart({ history, onOpenReport }) {
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [activePoint, setActivePoint] = useState(null);
+
+  if (!history || history.length === 0) return null;
+
+  // Aggregate by day
+  const daysMap = {};
+  history.forEach(item => {
+    const d = new Date(item.last_tested_at || item.attempted_at);
+    if (isNaN(d)) return;
+    const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    if (!daysMap[dateStr]) daysMap[dateStr] = { sum: 0, count: 0, date: d, label: dateStr, tests: [] };
+    daysMap[dateStr].sum += Number(item.accuracy_percentage) || 0;
+    daysMap[dateStr].count += 1;
+    daysMap[dateStr].tests.push(item);
+  });
+  
+  const sortedDays = Object.values(daysMap).sort((a, b) => a.date - b.date);
+  
+  // Default to the most recent day if no date is selected
+  const activeDateLabel = selectedDate || (sortedDays.length > 0 ? sortedDays[sortedDays.length - 1].label : null);
+  
+  if (!activeDateLabel) return null;
+
+  const dayData = daysMap[activeDateLabel];
+
+  // If no data for this selected date
+  if (!dayData) {
+    return (
+      <section className="panel performance-chart-panel">
+        <div className="panel-heading" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+          <div>
+            <span className="card-kicker">DAILY REPORT • {activeDateLabel}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '4px' }}>
+              <h3 style={{ margin: 0 }}>Session Insights</h3>
+              <span className="status-pill" style={{ fontSize: '10px', color: '#9499b8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}>NO DATA</span>
+            </div>
+          </div>
+          
+          <div className="chart-actions">
+            <CustomCalendarPicker 
+              activeDateLabel={activeDateLabel}
+              onSelectDate={(date) => { setSelectedDate(date); setActivePoint(null); }} 
+              daysMap={daysMap} 
+            />
+          </div>
+        </div>
+        
+        <div className="line-chart-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '180px' }}>
+          <div style={{ textAlign: 'center', color: '#777d96' }}>
+            <p style={{ margin: 0, fontSize: '14px' }}>No tests attempted on {activeDateLabel}</p>
+            <span style={{ fontSize: '12px' }}>Try selecting a different date from your history.</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  let chartData = [...dayData.tests].reverse().map(test => ({
+    label: test.topic_name,
+    accuracy_percentage: Number(test.accuracy_percentage) || 0,
+    attempt_id: test.attempt_id
+  }));
+
+  if (chartData.length === 1) {
+    chartData = [{ ...chartData[0], label: 'Start' }, chartData[0]];
+  }
+  if (chartData.length < 2) return null;
+
+  const dayAvg = Math.round(dayData.sum / dayData.count);
+  let dayTone = 'Excellent';
+  let dayToneClass = 'tone-green';
+  if (dayAvg < 40) { dayTone = 'Needs Work'; dayToneClass = 'tone-red'; }
+  else if (dayAvg < 60) { dayTone = 'Average'; dayToneClass = 'tone-yellow'; }
+  else if (dayAvg < 85) { dayTone = 'Good'; dayToneClass = 'tone-green'; }
+
+  const maxAcc = Math.max(...chartData.map(d => d.accuracy_percentage));
+  const minAcc = Math.min(...chartData.map(d => d.accuracy_percentage));
+  const shouldHighlight = maxAcc !== minAcc;
+  const maxIndex = chartData.findIndex(d => d.accuracy_percentage === maxAcc);
+  const minIndex = chartData.findIndex(d => d.accuracy_percentage === minAcc);
+
+  const N = chartData.length;
+  // Keep points inset from the container edges (X_PAD) and away from the
+  // very top/bottom (Y range 22%–78%) so the max/min highlight ring and the
+  // "Highest/Lowest Accuracy" elbow label always have room to render fully
+  // inside the panel instead of being cut off by its rounded, clipped edge.
+  const X_PAD = 8;
+  const getX = (i) => N === 1 ? 50 : X_PAD + (i / (N - 1)) * (100 - X_PAD * 2);
+  const getY = (acc) => 100 - (acc * 0.56 + 22);
+  
+  let pathD = '';
+  chartData.forEach((item, i) => {
+    pathD += `${i === 0 ? 'M' : 'L'} ${getX(i)},${getY(item.accuracy_percentage || 0)} `;
+  });
+  const areaD = `${pathD} L 100,100 L 0,100 Z`;
+
+  return (
+    <section className="panel performance-chart-panel">
+      <div className="panel-heading" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+        <div>
+          <span className="card-kicker">DAILY REPORT • {activeDateLabel}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '4px' }}>
+            <h3 style={{ margin: 0 }}>Session Insights</h3>
+            <span className={`status-pill ${dayToneClass}`} style={{ fontSize: '10px' }}>{dayTone}</span>
+          </div>
+        </div>
+        
+        <div className="chart-date-filter">
+          <CustomCalendarPicker 
+            activeDateLabel={activeDateLabel}
+            onSelectDate={(date) => { setSelectedDate(date); setActivePoint(null); }} 
+            daysMap={daysMap} 
+          />
+        </div>
+      </div>
+      
+      <div className="line-chart-container">
+        {activePoint !== null && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 5 }} onClick={() => setActivePoint(null)} />
+        )}
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="line-chart-svg">
+          <defs>
+            <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="rgba(75, 213, 151, 0.4)" />
+              <stop offset="50%" stopColor="rgba(236, 170, 98, 0.15)" />
+              <stop offset="100%" stopColor="rgba(235, 100, 123, 0.05)" />
+            </linearGradient>
+            <linearGradient id="lineGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#4bd597" />
+              <stop offset="30%" stopColor="#4bd597" />
+              <stop offset="60%" stopColor="#ecaa62" />
+              <stop offset="90%" stopColor="#eb647b" />
+            </linearGradient>
+            <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2" result="blur" />
+              <feComposite in="SourceGraphic" in2="blur" operator="over" />
+            </filter>
+          </defs>
+          <path d={areaD} fill="url(#chartGradient)" />
+          {/* Changed strokeWidth to 1.5 to make line thinner */}
+          <path d={pathD} fill="none" stroke="url(#lineGradient)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" filter="url(#glow)" />
+        </svg>
+
+        <div className="chart-points-overlay">
+          {chartData.map((item, i) => {
+            const acc = item.accuracy_percentage || 0;
+            const left = `${getX(i)}%`;
+            const bottom = `${acc * 0.56 + 22}%`;
+            
+            let tone = 'green';
+            if (acc < 40) tone = 'red';
+            else if (acc < 70) tone = 'yellow';
+            
+            const isMax = shouldHighlight && i === maxIndex;
+            const isMin = shouldHighlight && i === minIndex;
+            const highlightClass = isMax ? 'is-max' : isMin ? 'is-min' : '';
+            const isActive = activePoint === i;
+            const tooltipPosClass = acc > 50 ? 'pos-bottom' : 'pos-top';
+            
+            const isRightHalf = getX(i) > 50;
+            const alignClass = isRightHalf ? 'align-left' : 'align-right';
+
+            return (
+              <div key={i} className={`chart-point-marker ${highlightClass} ${isActive ? 'is-active' : ''}`} style={{ left, bottom }} onClick={() => setActivePoint(isActive ? null : i)}>
+                <div className={`chart-point-dot tone-${tone}`}></div>
+                
+                {/* Elbow Label for Max/Min - Hidden when active to avoid overlap */}
+                {isMax && !isActive && <div className={`chart-extrema-label max ${alignClass}`}>Highest Accuracy</div>}
+                {isMin && !isActive && <div className={`chart-extrema-label min ${alignClass}`}>Lowest Accuracy</div>}
+
+                {/* Clickable Tooltip */}
+                <div className={`chart-point-tooltip ${tooltipPosClass}`}>
+                  <b>{acc}%</b>
+                  <span>{item.label}</span>
+                  {isActive && item.attempt_id && (
+                    <button className="tooltip-action-btn" onClick={(e) => { e.stopPropagation(); onOpenReport(item.attempt_id); setActivePoint(null); }}>
+                      View Record <ArrowRight size={10} style={{ marginLeft: 2 }} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 // Progress page se kabhi bhi ek purani test ka poora question-by-question
@@ -1263,7 +1767,9 @@ function AttemptReportModal({ userId, attemptId, onClose }) {
           <div><span className="card-kicker">TEST REPORT</span><h3>{reportData?.topic_name || 'Practice test'}</h3><p className="muted">{reportData ? `${reportData.subject_name} · ${reportData.chapter_name} · ${reportData.difficulty || 'Medium'}` : ''}</p></div>
           <button className="icon-button" onClick={onClose} aria-label="Close report"><X size={19} /></button>
         </div>
-        {state.loading ? <LoaderLabel text="Loading your report" /> : state.error ? <AlertBanner message={state.error} /> : reportData?.has_detailed_answers ? <TestReportView questions={reportQuestions} answers={reportAnswers} /> : <p className="muted empty-copy">A question-by-question breakdown was not saved for this older attempt — only the summary score is available.</p>}
+        <div className="modal-body">
+          {state.loading ? <LoaderLabel text="Loading your report" /> : state.error ? <AlertBanner message={state.error} /> : (reportData?.has_detailed_answers || reportQuestions.length > 0) ? <TestReportView questions={reportQuestions} answers={reportAnswers} /> : <p className="muted empty-copy">A question-by-question breakdown was not saved for this older attempt — only the summary score is available.</p>}
+        </div>
       </div>
     </div>
   );
@@ -1385,9 +1891,9 @@ function TutorPage({ user }) {
     <section className="tutor-header">
       <div className="tutor-avatar"><Bot size={23} /></div>
       <div>
-        <span className="eyebrow"><span className="eyebrow-dot" /> GENRO AI TUTOR</span>
+        <span className="eyebrow"><span className="eyebrow-dot" /> OLIVER • AI TUTOR</span>
         <h2>Ask it the way you would ask a teacher.</h2>
-        <p>Genro sends your question to the backend and saves the conversation to your study history.</p>
+        <p>Oliver is your personal AI tutor. Ask a question, get a clear explanation — anytime.</p>
       </div>
     </section>
     <section className="chat-shell">
@@ -1395,7 +1901,7 @@ function TutorPage({ user }) {
         {state.loading ? <div className="chat-loading"><LoaderLabel text="Loading your conversation" /></div> : state.error && !hasMessages ? <RequestState icon={XCircle} title="We couldn't open your chat history" text={state.error} /> : <>
           {!hasMessages && <WelcomeMessage name={user.full_name} />}
           {messages.map((message) => <ChatBubble message={message} key={message.id} onEdit={editMessage} />)}
-          {state.sending && <div className="typing-indicator"><span /><span /><span /> Genro AI is thinking</div>}
+          {state.sending && <div className="typing-indicator"><span /><span /><span /> Oliver is thinking…</div>}
         </>}
         <div ref={endRef} />
       </div>
@@ -1771,6 +2277,14 @@ function TestReportView({ questions, answers }) {
       <div className="report-summary-stat wrong"><strong>{counts.wrong}</strong><span>Incorrect</span></div>
       <div className="report-summary-stat skipped"><strong>{counts.skipped}</strong><span>Skipped</span></div>
     </div>
+    
+    {(weakTopics.length > 0 || strongTopics.length > 0) && (
+      <section className="content-grid two-column" style={{ marginTop: '32px', marginBottom: '8px' }}>
+        <TopicInsightPanel title="Revision queue" subtitle="Weak topics" icon={Target} tone="rose" topics={weakTopics} emptyText="No weak topics found." showVideoHelp />
+        <TopicInsightPanel title="Growing strengths" subtitle="Strong topics" icon={Trophy} tone="green" topics={strongTopics} emptyText="No strong topics yet." />
+      </section>
+    )}
+
     <div className="report-filter-row" role="tablist" aria-label="Filter questions">
       {REPORT_FILTERS.map((item) => <button key={item.key} type="button" role="tab" aria-selected={filter === item.key} className={filter === item.key ? 'active' : ''} onClick={() => setFilter(item.key)}>{item.label}{item.key !== 'all' ? ` (${counts[item.key] || 0})` : ''}</button>)}
     </div>
@@ -1784,7 +2298,12 @@ function TestReportView({ questions, answers }) {
             {question.options.map((option) => {
               const isSelected = selected === option.key;
               const isCorrectOption = correct === option.key;
-              return <div key={option.key} className={`report-option ${isCorrectOption ? 'is-correct' : ''} ${isSelected && !isCorrectOption ? 'is-selected-wrong' : ''}`}><span>{option.key}</span><p>{cleanMathText(option.text)}</p>{isCorrectOption && <Check size={14} />}{isSelected && !isCorrectOption && <X size={14} />}</div>;
+              return <div key={option.key} className={`report-option${isCorrectOption ? ' is-correct' : ''}${isSelected && !isCorrectOption ? ' is-selected-wrong' : ''}`}>
+                <span className="report-option-key">{option.key}</span>
+                <p className="report-option-text">{cleanMathText(option.text)}</p>
+                {isCorrectOption && <Check size={14} style={{color:'#6ee7b0',flexShrink:0}} />}
+                {isSelected && !isCorrectOption && <X size={14} style={{color:'#f09aab',flexShrink:0}} />}
+              </div>;
             })}
           </div>
         </article>
@@ -1812,8 +2331,9 @@ function videoRecommendationFor(topic) {
 function TopicInsightPanel({ title, subtitle, icon: Icon, tone, topics, emptyText, showVideoHelp = false }) {
   return <article className={`panel topic-insight ${tone}`}><div className="panel-heading"><div><span className="card-kicker">{subtitle}</span><h3>{title}</h3></div><span className={`panel-icon ${tone}`}><Icon size={19} /></span></div>{topics.length ? <div className="insight-list">{topics.slice(0, 4).map((topic) => {
     const video = showVideoHelp ? videoRecommendationFor(topic) : null;
-    return <div className="insight-item" key={topic.progress_id || topic.topic_id}>
-      <div><b>{topic.topic_name}</b><span>{topic.subject_name} · {topic.chapter_name}</span></div>
+    const subtitleText = [topic.subject_name, topic.chapter_name].filter(Boolean).join(' • ');
+    return <div className="insight-item" key={topic.progress_id || topic.topic_id || topic.topic_name}>
+      <div><b>{topic.topic_name}</b>{subtitleText && <span>{subtitleText}</span>}</div>
       <div className="insight-item-side"><AccuracyBadge value={topic.accuracy_percentage} />{video && <a className="video-rec-link" href={video.url} target="_blank" rel="noreferrer"><PlayCircle size={13} /> {video.isCurated ? 'Watch explainer' : 'Find a video'}</a>}</div>
     </div>;
   })}</div> : <p className="muted empty-copy">{emptyText}</p>}</article>;
@@ -1879,7 +2399,7 @@ function SyllabusSkeleton() {
 }
 
 function WelcomeMessage({ name }) {
-  return <div className="welcome-message"><span className="chat-bot-icon"><Bot size={20} /></span><div><span className="card-kicker">GENRO AI</span><h3>Hi {name.split(' ')[0]}, what are we working through today?</h3><p>I can explain a concept, help you structure revision, or break a difficult question into simpler steps.</p></div></div>;
+  return <div className="welcome-message"><span className="chat-bot-icon"><Bot size={20} /></span><div><span className="card-kicker">OLIVER</span><h3>Hi {name.split(' ')[0]}, what are we working through today?</h3><p>I'm Oliver, your personal AI tutor. I can explain any concept simply, help you plan your revision, or break down a tricky question step by step.</p></div></div>;
 }
 
 function ChatBubble({ message, onEdit }) {
